@@ -1,0 +1,12 @@
+{
+  "name": "happy-robot-assignment",
+  "private": true,
+  "scripts": {
+    "setup": "npm run setup:backend && npm run setup:ui",
+    "setup:backend": "cd backend && uv sync",
+    "setup:ui": "bash -lc 'cd ui && if command -v pnpm >/dev/null 2>&1; then pnpm install; else npm install; fi'",
+    "dev": "bash -lc 'npm run dev:backend & npm run dev:ui & wait'",
+    "dev:backend": "cd backend && uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000",
+    "dev:ui": "bash -lc 'cd ui && if command -v pnpm >/dev/null 2>&1; then pnpm dev; else npm run dev; fi'"
+  }
+}
