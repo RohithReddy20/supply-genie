@@ -44,6 +44,10 @@ class Settings:
     resend_api_key: str = os.getenv("RESEND_API_KEY", "")
     email_from: str = os.getenv("EMAIL_FROM", "coordinator@resend.dev")
 
+    # Gemini (Google GenAI)
+    vertex_ai_key: str = os.getenv("VERTEX_AI_KEY", "")
+    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
     # Retry
     max_retries: int = int(os.getenv("MAX_RETRIES", "3"))
 
