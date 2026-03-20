@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import POStatus
+from app.services.connectors.email import send_email as email_send
 from app.services.connectors.po_system import update_po
 from app.services.connectors.slack import send_message as slack_send
 from app.services.connectors.twilio_voice import get_call_status, make_call
@@ -91,10 +92,11 @@ async def po_update_endpoint(payload: PoUpdateRequest, db: Session = Depends(get
 
 
 @router.post("/email/send")
-async def send_email(payload: EmailRequest) -> dict[str, str]:
+async def send_email_endpoint(payload: EmailRequest) -> dict:
+    result = email_send(to=payload.to, subject=payload.subject, body=payload.body)
     return {
         "job_id": str(uuid4()),
-        "status": "queued",
+        "status": "sent" if result.ok else "failed",
         "provider": "resend",
-        "to": payload.to,
+        **asdict(result),
     }

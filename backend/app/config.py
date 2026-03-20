@@ -40,6 +40,10 @@ class Settings:
         "on",
     }
 
+    # Resend (Email)
+    resend_api_key: str = os.getenv("RESEND_API_KEY", "")
+    email_from: str = os.getenv("EMAIL_FROM", "coordinator@resend.dev")
+
     # Retry
     max_retries: int = int(os.getenv("MAX_RETRIES", "3"))
 

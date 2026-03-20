@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.models import ActionRun, ActionStatus, ActionType, Incident, POStatus
+from app.services.connectors.email import send_email
 from app.services.connectors.po_system import update_po as po_update
 from app.services.connectors.slack import send_message as slack_send
 from app.services.connectors.twilio_voice import make_call
@@ -73,6 +74,9 @@ def _dispatch(db: Session, action: ActionRun, incident: Incident) -> bool:
 
     if action.action_type == ActionType.update_po:
         return _execute_po_update(db, action, payload)
+
+    if action.action_type == ActionType.email_customer:
+        return _execute_email(db, action, payload, incident)
 
     # Other action types will be implemented in subsequent days
     logger.info("Action %s not yet implemented — marking completed (stub)", action.action_type.value)
@@ -150,6 +154,49 @@ def _execute_call(action: ActionRun, payload: dict, call_type: str) -> bool:
     action.request_payload = {"to": to, "message": message, "call_type": call_type}
 
     result = make_call(to=to, message=message)
+    action.response_payload = asdict(result)
+
+    if not result.ok:
+        action.error_message = result.error
+        return False
+    return True
+
+
+def _execute_email(db: Session, action: ActionRun, payload: dict, incident: Incident) -> bool:
+    from app.models import Shipment
+
+    po_number = payload.get("po_number", "N/A")
+    delay_reason = payload.get("delay_reason", "Unknown")
+    new_eta = payload.get("new_eta", "TBD")
+
+    shipment = incident.shipment
+    if not shipment and po_number != "N/A":
+        shipment = db.query(Shipment).filter(Shipment.po_number == po_number).first()
+
+    customer_email = shipment.customer_email if shipment else payload.get("customer_email", "")
+    customer_name = shipment.customer_name if shipment else payload.get("customer_name", "Valued Customer")
+
+    if not customer_email:
+        action.error_message = "No customer email available"
+        return False
+
+    subject = f"Update on your order {po_number}"
+    body = (
+        f"<p>Dear {customer_name},</p>"
+        f"<p>We are writing to inform you about a delay affecting your order "
+        f"<strong>{po_number}</strong>.</p>"
+        f"<p><strong>Reason:</strong> {delay_reason}<br>"
+        f"<strong>Revised ETA:</strong> {new_eta}</p>"
+        f"<p>We sincerely apologize for the inconvenience and are actively "
+        f"working to minimize the impact. Our team has already contacted the "
+        f"supplier and updated the purchase order accordingly.</p>"
+        f"<p>If you have any questions, please don't hesitate to reach out.</p>"
+        f"<p>Best regards,<br>Supply Chain Coordination Team</p>"
+    )
+
+    action.request_payload = {"to": customer_email, "subject": subject}
+
+    result = send_email(to=customer_email, subject=subject, body=body)
     action.response_payload = asdict(result)
 
     if not result.ok:
