@@ -1,0 +1,6 @@
+node_modules
+.vscode
+backend/.venv
+backend/__pycache__
+**/__pycache__
+backend/app/routers/__pycache__
