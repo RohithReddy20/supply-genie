@@ -1,3 +1,3 @@
-from . import connectors, health, orchestrator
+from . import connectors, health, incidents, orchestrator
 
-__all__ = ["connectors", "health", "orchestrator"]
+__all__ = ["connectors", "health", "incidents", "orchestrator"]

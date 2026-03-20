@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from app.schemas import ActionResult, DelayEvent, DelayWorkflowResponse
+from app.schemas import ActionResult, DelayWorkflowResponse
 from app.services.safety import check_human_approval_required
 
 

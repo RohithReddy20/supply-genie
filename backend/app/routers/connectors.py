@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 from uuid import uuid4
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
+
+from app.services.connectors.slack import send_message as slack_send
 
 router = APIRouter(prefix="/connectors", tags=["connectors"])
 
@@ -32,12 +35,14 @@ class EmailRequest(BaseModel):
 
 
 @router.post("/slack/notify")
-async def slack_notify(payload: SlackNotifyRequest) -> dict[str, str]:
+async def slack_notify(payload: SlackNotifyRequest) -> dict:
+    result = slack_send(channel=payload.channel, message=payload.message)
     return {
         "job_id": str(uuid4()),
-        "status": "queued",
+        "status": "sent" if result.ok else "failed",
         "provider": "slack",
-        "channel": payload.channel,
+        "channel": result.channel,
+        **asdict(result),
     }
 
 
