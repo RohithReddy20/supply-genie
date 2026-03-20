@@ -28,6 +28,18 @@ class Settings:
     slack_bot_token: str = os.getenv("SLACK_BOT_TOKEN", "")
     slack_default_channel: str = os.getenv("SLACK_DEFAULT_CHANNEL", "#general")
 
+    # Twilio Voice
+    twilio_account_sid: str = os.getenv("TWILIO_ACCOUNT_SID", "")
+    twilio_auth_token: str = os.getenv("TWILIO_AUTH_TOKEN", "")
+    twilio_from_number: str = os.getenv("TWILIO_FROM_NUMBER", "")
+    twilio_default_to: str = os.getenv("TWILIO_DEFAULT_TO", "")
+    twilio_mock_mode: bool = os.getenv("TWILIO_MOCK_MODE", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
     # Retry
     max_retries: int = int(os.getenv("MAX_RETRIES", "3"))
 

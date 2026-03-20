@@ -30,6 +30,11 @@
   - cd ui && pnpm build (fallback: npm run build)
   - cd ui && npm run lint
 
+## Lint And Test
+- UI lint: cd ui && npm run lint
+- Backend: no dedicated lint/test scripts are configured in this repo yet.
+- Root/backend/ui do not currently define automated test commands.
+
 ## Conventions
 - Backend:
   - Use Python 3.12+ and keep type hints on public functions.
@@ -43,6 +48,9 @@
 ## Pitfalls
 - Backend dependencies and commands use uv, not pip.
 - UI package manager preference is pnpm when available; scripts fall back to npm.
+- Next.js version is 16.x with potential breaking changes. Read ui/AGENTS.md before changing UI code.
+- Incident ingestion routes require Idempotency-Key; duplicates return existing records (200) instead of creating new ones (201).
+- REQUIRE_HUMAN_APPROVAL defaults to true; customer-facing actions can be gated until approved.
 - Connector endpoints are currently stubs. Do not claim external side effects are implemented unless you add them.
 - No dedicated automated test commands are configured yet at root/backend/ui.
 
@@ -53,5 +61,8 @@
 - backend/app/services/orchestrator.py
 - backend/app/services/safety.py
 - ui/app/layout.tsx
+- ui/AGENTS.md
+- docs/api-contracts.md
+- docs/domain.md
 - setup-plan.md
 - execution-plan-14-days.md
