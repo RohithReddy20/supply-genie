@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.models import ActionRun, ActionStatus, ActionType, Incident, POStatus
 from app.services.connectors.email import send_email
+from app.services.connectors.labor_system import update_labor_record
+from app.services.connectors.manager_notify import notify_site_manager
 from app.services.connectors.po_system import update_po as po_update
 from app.services.connectors.slack import send_message as slack_send
 from app.services.connectors.twilio_voice import make_call
@@ -78,7 +80,13 @@ def _dispatch(db: Session, action: ActionRun, incident: Incident) -> bool:
     if action.action_type == ActionType.email_customer:
         return _execute_email(db, action, payload, incident)
 
-    # Other action types will be implemented in subsequent days
+    if action.action_type == ActionType.update_labor:
+        return _execute_labor_update(action, payload)
+
+    if action.action_type == ActionType.notify_manager:
+        return _execute_notify_manager(action, payload)
+
+    # Remaining action types (escalate_ticket, etc.) — stub for now
     logger.info("Action %s not yet implemented — marking completed (stub)", action.action_type.value)
     action.response_payload = {"stub": True}
     return True
@@ -223,6 +231,78 @@ def _execute_po_update(db: Session, action: ActionRun, payload: dict) -> bool:
 
     result = po_update(db, po_number=po_number, new_status=POStatus.amended, notes=notes)
     action.response_payload = asdict(result)
+
+    if not result.ok:
+        action.error_message = result.error
+        return False
+    return True
+
+
+def _execute_labor_update(action: ActionRun, payload: dict) -> bool:
+    worker_name = payload.get("worker_name", "Unknown")
+    site_id = payload.get("site_id", "Unknown")
+    shift_date = payload.get("shift_date", "TBD")
+    role = payload.get("role", "general")
+    reason = payload.get("reason", "")
+
+    action.request_payload = {
+        "site_id": site_id,
+        "worker_name": worker_name,
+        "shift_date": shift_date,
+        "role": role,
+        "status": "absent",
+    }
+
+    result = update_labor_record(
+        site_id=site_id,
+        worker_name=worker_name,
+        shift_date=shift_date,
+        role=role,
+        reason=reason,
+    )
+    action.response_payload = {
+        "ok": result.ok,
+        "site_id": result.site_id,
+        "worker_name": result.worker_name,
+        "shift_date": result.shift_date,
+        "status": result.status,
+        "coverage_needed": result.coverage_needed,
+        "error": result.error,
+    }
+
+    if not result.ok:
+        action.error_message = result.error
+        return False
+    return True
+
+
+def _execute_notify_manager(action: ActionRun, payload: dict) -> bool:
+    site_id = payload.get("site_id", "Unknown")
+    worker_name = payload.get("worker_name", "Unknown")
+    shift_date = payload.get("shift_date", "TBD")
+    role = payload.get("role", "general")
+    reason = payload.get("reason", "")
+
+    action.request_payload = {
+        "site_id": site_id,
+        "worker_name": worker_name,
+        "shift_date": shift_date,
+        "role": role,
+    }
+
+    result = notify_site_manager(
+        site_id=site_id,
+        worker_name=worker_name,
+        shift_date=shift_date,
+        role=role,
+        reason=reason,
+    )
+    action.response_payload = {
+        "ok": result.ok,
+        "channel": result.channel,
+        "ts": result.ts,
+        "error": result.error,
+    }
 
     if not result.ok:
         action.error_message = result.error
