@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.observability import configure_observability, correlation_id_middleware
-from app.routers import approvals, chat, connectors, health, incidents, orchestrator
+from app.routers import approvals, chat, connectors, health, incidents, orchestrator, voice
 
 settings = get_settings()
 configure_observability(service_name="happy-robot-backend")
@@ -30,6 +30,7 @@ app.include_router(orchestrator.router, prefix=settings.api_prefix)
 app.include_router(approvals.router, prefix=settings.api_prefix)
 app.include_router(connectors.router, prefix=settings.api_prefix)
 app.include_router(chat.router, prefix=settings.api_prefix)
+app.include_router(voice.router, prefix=settings.api_prefix)
 
 
 @app.get("/")

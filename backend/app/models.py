@@ -193,3 +193,36 @@ class Approval(Base):
 
     action_run: Mapped[ActionRun] = relationship(back_populates="approval")
     incident: Mapped[Incident] = relationship()
+
+
+class VoiceSession(Base):
+    __tablename__ = "voice_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_new_uuid)
+    call_sid: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    stream_sid: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    incident_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("incidents.id"), nullable=True)
+    correlation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), default=_new_uuid)
+    direction: Mapped[str] = mapped_column(String(20), nullable=False, default="inbound")  # inbound | outbound
+    from_number: Mapped[str] = mapped_column(String(50), nullable=False, default="")
+    to_number: Mapped[str] = mapped_column(String(50), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="connected")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSON, default=None)
+
+    incident: Mapped[Incident | None] = relationship()
+    transcript_events: Mapped[list[TranscriptEvent]] = relationship(back_populates="voice_session", order_by="TranscriptEvent.created_at")
+
+
+class TranscriptEvent(Base):
+    __tablename__ = "transcript_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_new_uuid)
+    voice_session_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("voice_sessions.id"), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)  # assistant | caller | system
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    voice_session: Mapped[VoiceSession] = relationship(back_populates="transcript_events")

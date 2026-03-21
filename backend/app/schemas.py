@@ -116,3 +116,37 @@ class DelayWorkflowResponse(BaseModel):
     workflow_id: str
     correlation_id: str
     actions: list[ActionResult]
+
+
+# ── Voice / Transcript ──────────────────────────────────────────────────
+
+class VoiceSessionOut(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: UUID
+    call_sid: str
+    stream_sid: str | None = None
+    incident_id: UUID | None = None
+    correlation_id: UUID
+    direction: str
+    from_number: str
+    to_number: str
+    status: str
+    started_at: datetime
+    ended_at: datetime | None = None
+    duration_seconds: int | None = None
+
+
+class TranscriptEventOut(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: UUID
+    role: str
+    content: str
+    created_at: datetime
+
+
+class OutboundCallRequest(BaseModel):
+    to: str = Field(min_length=5)
+    incident_id: UUID | None = None
+    greeting: str = Field(default="")
