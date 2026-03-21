@@ -12,7 +12,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections import deque
 from datetime import datetime, timezone
+from time import perf_counter
+from typing import Any, cast
 from uuid import uuid4
 
 from google import genai
@@ -50,7 +53,7 @@ Tone: Brief, direct, conversational. Speak naturally for a phone call — \
 short sentences, no markdown or bullet points. Be warm but efficient.\
 """
 
-LIVE_TOOL_DECLARATIONS: list[dict] = [
+LIVE_TOOL_DECLARATIONS: list[dict[str, Any]] = [
     {
         "function_declarations": [
             {
@@ -107,7 +110,50 @@ LIVE_TOOL_DECLARATIONS: list[dict] = [
     },
 ]
 
-GEMINI_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
+_DEFAULT_START_SENSITIVITY = "START_SENSITIVITY_HIGH"
+_DEFAULT_END_SENSITIVITY = "END_SENSITIVITY_HIGH"
+_VALID_START_SENSITIVITY = {
+    "START_SENSITIVITY_UNSPECIFIED",
+    "START_SENSITIVITY_HIGH",
+    "START_SENSITIVITY_LOW",
+}
+_VALID_END_SENSITIVITY = {
+    "END_SENSITIVITY_UNSPECIFIED",
+    "END_SENSITIVITY_HIGH",
+    "END_SENSITIVITY_LOW",
+}
+
+
+class _LatencyWindow:
+    """Keeps a rolling window of latency samples for quick p95 diagnostics."""
+
+    def __init__(self, max_samples: int = 240) -> None:
+        self.samples: deque[float] = deque(maxlen=max_samples)
+
+    def add(self, duration_ms: float) -> None:
+        self.samples.append(duration_ms)
+
+    def summary(self) -> tuple[float, float, float, int]:
+        count = len(self.samples)
+        if count == 0:
+            return (0.0, 0.0, 0.0, 0)
+        ordered = sorted(self.samples)
+        p95_index = min(count - 1, max(0, int(count * 0.95) - 1))
+        avg = sum(self.samples) / count
+        return (avg, ordered[p95_index], ordered[-1], count)
+
+
+def _normalize_sensitivity(value: str, *, is_start: bool) -> str:
+    normalized = (value or "").strip().upper()
+    if is_start:
+        return (
+            normalized
+            if normalized in _VALID_START_SENSITIVITY
+            else _DEFAULT_START_SENSITIVITY
+        )
+    return (
+        normalized if normalized in _VALID_END_SENSITIVITY else _DEFAULT_END_SENSITIVITY
+    )
 
 
 # ── Active session registry ─────────────────────────────────────────────
@@ -125,6 +171,8 @@ def get_active_session(stream_sid: str) -> VoicePipeline | None:
 class VoicePipeline:
     """Manages a single real-time voice session between Twilio and Gemini."""
 
+    LATENCY_SAMPLE_WINDOW = 240
+
     def __init__(
         self,
         twilio_ws: WebSocket,
@@ -133,6 +181,8 @@ class VoicePipeline:
         incident_id: str | None = None,
         greeting: str = "",
     ) -> None:
+        settings = get_settings()
+
         self.twilio_ws = twilio_ws
         self.call_sid = call_sid
         self.stream_sid: str | None = None
@@ -140,40 +190,84 @@ class VoicePipeline:
         self.greeting = greeting
         self.correlation_id = str(uuid4())
 
+        self._opening_prompt_delay_s = settings.voice_opening_prompt_delay_s
+        self._audio_batch_bytes = 16000 * 2 * settings.voice_audio_batch_ms // 1000
+
+        self._vad_start_sensitivity = _normalize_sensitivity(
+            settings.voice_vad_start_sensitivity,
+            is_start=True,
+        )
+        self._vad_end_sensitivity = _normalize_sensitivity(
+            settings.voice_vad_end_sensitivity,
+            is_start=False,
+        )
+        self._vad_prefix_padding_ms = settings.voice_vad_prefix_padding_ms
+        self._vad_silence_duration_ms = settings.voice_vad_silence_duration_ms
+        self._thinking_budget = settings.voice_thinking_budget
+
         # Transcript accumulator
-        self.transcript: list[dict] = []
+        self.transcript: list[dict[str, str]] = []
 
         # Gemini session (set in run())
         self._gemini_session = None
         self._stopped = False
         self._stream_ready = asyncio.Event()  # set when Twilio stream starts
+        self._last_caller_transcript_text: str | None = None
+        self._pending_turn_started_at: float | None = None
 
-        # Tool execution imports (lazy to avoid circular)
-        self._db_session = None
+        # Inbound audio queue (Twilio -> Gemini)
+        self._audio_queue: asyncio.Queue[tuple[bytes, float]] = asyncio.Queue(
+            maxsize=settings.voice_inbound_audio_queue_max
+        )
+
+        # Outbound audio queue (Gemini -> Twilio) for non-blocking sends
+        self._twilio_out_queue: asyncio.Queue[tuple[bytes, float]] = asyncio.Queue(
+            maxsize=settings.voice_outbound_audio_queue_max
+        )
+
+        self._dropped_inbound_audio = 0
+        self._dropped_outbound_audio = 0
+        self._stage_latency: dict[str, _LatencyWindow] = {}
 
     async def run(self) -> None:
         """Main loop: bridge Twilio WS ↔ Gemini Live API session."""
         settings = get_settings()
         client = genai.Client(api_key=settings.vertex_ai_key)
 
-        config: dict = {
-            "response_modalities": ["AUDIO"],
-            "system_instruction": self._build_system_instruction(),
-            "tools": LIVE_TOOL_DECLARATIONS,
-            "speech_config": {
-                "voice_config": {
-                    "prebuilt_voice_config": {
-                        "voice_name": "Kore",
+        config = cast(
+            types.LiveConnectConfigOrDict,
+            {
+                "response_modalities": ["AUDIO"],
+                "system_instruction": self._build_system_instruction(),
+                "tools": LIVE_TOOL_DECLARATIONS,
+                "speech_config": {
+                    "voice_config": {
+                        "prebuilt_voice_config": {
+                            "voice_name": "Kore",
+                        },
                     },
                 },
+                "input_audio_transcription": {},
+                "output_audio_transcription": {},
+                "thinking_config": {
+                    "thinking_budget": self._thinking_budget,
+                },
+                "realtime_input_config": {
+                    "automatic_activity_detection": {
+                        "start_of_speech_sensitivity": self._vad_start_sensitivity,
+                        "end_of_speech_sensitivity": self._vad_end_sensitivity,
+                        "prefix_padding_ms": self._vad_prefix_padding_ms,
+                        "silence_duration_ms": self._vad_silence_duration_ms,
+                    },
+                    "activity_handling": "START_OF_ACTIVITY_INTERRUPTS",
+                    "turn_coverage": "TURN_INCLUDES_ONLY_ACTIVITY",
+                },
             },
-            "input_audio_transcription": {},
-            "output_audio_transcription": {},
-        }
+        )
 
         try:
             async with client.aio.live.connect(
-                model=GEMINI_LIVE_MODEL, config=config
+                model=settings.gemini_live_model, config=config
             ) as session:
                 self._gemini_session = session
                 logger.info(
@@ -183,8 +277,10 @@ class VoicePipeline:
                 )
 
                 await asyncio.gather(
-                    self._receive_from_twilio(session),
+                    self._receive_from_twilio(),
+                    self._send_queued_audio_to_gemini(session),
                     self._receive_from_gemini(session),
+                    self._send_queued_audio_to_twilio(),
                     self._send_opening_prompt(session),
                 )
         except Exception:
@@ -201,13 +297,24 @@ class VoicePipeline:
             parts.append(f"\n\nActive incident ID: {self.incident_id}")
         return "\n".join(parts)
 
+    def _record_latency(self, stage: str, duration_ms: float) -> None:
+        window = self._stage_latency.get(stage)
+        if window is None:
+            window = _LatencyWindow(max_samples=self.LATENCY_SAMPLE_WINDOW)
+            self._stage_latency[stage] = window
+        window.add(duration_ms)
+
     # ── Opening prompt ────────────────────────────────────────────────────
 
-    async def _send_opening_prompt(self, session) -> None:
+    async def _send_opening_prompt(self, session: Any) -> None:
         """Wait for Twilio stream to be ready, then prompt Gemini to speak first."""
-        await self._stream_ready.wait()
+        while not self._stopped and not self._stream_ready.is_set():
+            await asyncio.sleep(0.05)
+        if self._stopped:
+            return
+
         # Small delay to ensure audio pipe is fully established
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(self._opening_prompt_delay_s)
 
         if self.greeting:
             prompt = f"[System: Greet the caller. Context: {self.greeting}]"
@@ -217,7 +324,7 @@ class VoicePipeline:
                 "the Supply Chain Coordinator AI assistant and ask how you can help.]"
             )
 
-        logger.info("Sending opening prompt to Gemini")
+        started = perf_counter()
         await session.send_client_content(
             turns=types.Content(
                 role="user",
@@ -225,32 +332,41 @@ class VoicePipeline:
             ),
             turn_complete=True,
         )
+        elapsed_ms = (perf_counter() - started) * 1000.0
+        self._record_latency("opening_prompt_send_ms", elapsed_ms)
 
     # ── Twilio → Gemini ──────────────────────────────────────────────────
 
-    async def _receive_from_twilio(self, session) -> None:
+    async def _receive_from_twilio(self) -> None:
         """Read Twilio Media Stream messages and forward audio to Gemini."""
         try:
             while not self._stopped:
+                recv_started = perf_counter()
                 raw = await self.twilio_ws.receive_text()
+                self._record_latency(
+                    "twilio_ws_receive_ms",
+                    (perf_counter() - recv_started) * 1000.0,
+                )
+
                 msg = json.loads(raw)
                 event = msg.get("event")
 
                 if event == "start":
-                    self.stream_sid = msg["start"]["streamSid"]
-                    _active_sessions[self.stream_sid] = self
+                    stream_sid = msg["start"]["streamSid"]
+                    self.stream_sid = stream_sid
+                    _active_sessions[stream_sid] = self
                     self._stream_ready.set()
                     logger.info("Twilio stream started: %s", self.stream_sid)
 
                 elif event == "media":
                     payload_b64 = msg["media"]["payload"]
+                    decode_started = perf_counter()
                     pcm_16k = twilio_mulaw_to_gemini_pcm(payload_b64)
-                    await session.send_realtime_input(
-                        audio=types.Blob(
-                            data=pcm_16k,
-                            mime_type="audio/pcm;rate=16000",
-                        )
+                    self._record_latency(
+                        "twilio_decode_ms",
+                        (perf_counter() - decode_started) * 1000.0,
                     )
+                    self._enqueue_inbound_audio(pcm_16k)
 
                 elif event == "stop":
                     logger.info("Twilio stream stopped: %s", self.stream_sid)
@@ -262,9 +378,72 @@ class VoicePipeline:
                 logger.exception("Error receiving from Twilio")
             self._stopped = True
 
+    async def _send_queued_audio_to_gemini(self, session: Any) -> None:
+        """Drain queued inbound audio and send to Gemini without blocking Twilio reads."""
+        try:
+            while not self._stopped:
+                try:
+                    pcm_16k, enqueued_at = await asyncio.wait_for(
+                        self._audio_queue.get(), timeout=0.1
+                    )
+                except asyncio.TimeoutError:
+                    continue
+
+                self._record_latency(
+                    "inbound_queue_delay_ms",
+                    (perf_counter() - enqueued_at) * 1000.0,
+                )
+
+                # Opportunistically batch already-queued chunks to lower WS overhead.
+                batch = bytearray(pcm_16k)
+                while len(batch) < self._audio_batch_bytes:
+                    try:
+                        queued_pcm_16k, _queued_at = self._audio_queue.get_nowait()
+                        batch.extend(queued_pcm_16k)
+                    except asyncio.QueueEmpty:
+                        break
+
+                send_started = perf_counter()
+                await session.send_realtime_input(
+                    audio=types.Blob(
+                        data=bytes(batch),
+                        mime_type="audio/pcm;rate=16000",
+                    )
+                )
+                self._record_latency(
+                    "gemini_send_realtime_input_ms",
+                    (perf_counter() - send_started) * 1000.0,
+                )
+        except Exception:
+            if not self._stopped:
+                logger.exception("Error sending audio to Gemini")
+            self._stopped = True
+
+    def _enqueue_inbound_audio(self, pcm_16k: bytes) -> None:
+        """Queue Twilio audio, dropping oldest frames on backpressure to stay realtime."""
+        item = (pcm_16k, perf_counter())
+        try:
+            self._audio_queue.put_nowait(item)
+        except asyncio.QueueFull:
+            try:
+                self._audio_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                self._audio_queue.put_nowait(item)
+            except asyncio.QueueFull:
+                return
+            self._dropped_inbound_audio += 1
+            if self._dropped_inbound_audio % 25 == 0:
+                logger.warning(
+                    "Dropped %d inbound audio chunks due to backpressure (call_sid=%s)",
+                    self._dropped_inbound_audio,
+                    self.call_sid,
+                )
+
     # ── Gemini → Twilio ──────────────────────────────────────────────────
 
-    async def _receive_from_gemini(self, session) -> None:
+    async def _receive_from_gemini(self, session: Any) -> None:
         """Read Gemini Live responses and forward audio back to Twilio."""
         try:
             while not self._stopped:
@@ -285,12 +464,15 @@ class VoicePipeline:
                         if sc.model_turn:
                             for part in sc.model_turn.parts:
                                 if part.inline_data and part.inline_data.data:
-                                    await self._send_audio_to_twilio(
-                                        part.inline_data.data
-                                    )
+                                    self._enqueue_outbound_audio(part.inline_data.data)
 
                         # Transcription capture
                         if sc.input_transcription and sc.input_transcription.text:
+                            caller_text = sc.input_transcription.text.strip()
+                            if caller_text and caller_text != self._last_caller_transcript_text:
+                                self._last_caller_transcript_text = caller_text
+                                self._pending_turn_started_at = perf_counter()
+
                             self.transcript.append({
                                 "role": "caller",
                                 "content": sc.input_transcription.text,
@@ -313,16 +495,18 @@ class VoicePipeline:
                 logger.exception("Error receiving from Gemini")
             self._stopped = True
 
-    async def _handle_tool_calls(self, session, tool_call) -> None:
+    async def _handle_tool_calls(self, session: Any, tool_call: Any) -> None:
         """Execute tool calls from Gemini and send responses back."""
-        function_responses = []
+        function_responses: list[types.FunctionResponse] = []
 
         for fc in tool_call.function_calls:
             fn_name = fc.name
             fn_args = dict(fc.args) if fc.args else {}
             logger.info("Voice tool call: %s(%s)", fn_name, fn_args)
 
-            result = self._execute_tool(fn_name, fn_args)
+            started = perf_counter()
+            result = await asyncio.to_thread(self._execute_tool, fn_name, fn_args)
+            self._record_latency("tool_exec_ms", (perf_counter() - started) * 1000.0)
 
             self.transcript.append({
                 "role": "system",
@@ -340,13 +524,12 @@ class VoicePipeline:
 
         await session.send_tool_response(function_responses=function_responses)
 
-    def _execute_tool(self, name: str, args: dict) -> str:
+    def _execute_tool(self, name: str, args: dict[str, Any]) -> str:
         """Execute a tool synchronously (DB operations via thread-local session)."""
         from app.database import SessionLocal
         from app.models import (
             ActionRun,
             ActionStatus,
-            ActionType,
             Approval,
             ApprovalStatus,
             Incident,
@@ -471,21 +654,79 @@ class VoicePipeline:
 
     # ── Twilio outbound helpers ──────────────────────────────────────────
 
+    async def _send_queued_audio_to_twilio(self) -> None:
+        """Drain queued model audio and send to Twilio without blocking Gemini reads."""
+        try:
+            while not self._stopped:
+                try:
+                    pcm_24k, enqueued_at = await asyncio.wait_for(
+                        self._twilio_out_queue.get(), timeout=0.1
+                    )
+                except asyncio.TimeoutError:
+                    continue
+
+                self._record_latency(
+                    "outbound_queue_delay_ms",
+                    (perf_counter() - enqueued_at) * 1000.0,
+                )
+
+                await self._send_audio_to_twilio(pcm_24k)
+        except Exception:
+            if not self._stopped:
+                logger.exception("Error sending audio to Twilio")
+            self._stopped = True
+
+    def _enqueue_outbound_audio(self, pcm_24k: bytes) -> None:
+        """Queue Gemini audio, dropping oldest frames on backpressure to stay realtime."""
+        item = (pcm_24k, perf_counter())
+        try:
+            self._twilio_out_queue.put_nowait(item)
+        except asyncio.QueueFull:
+            try:
+                self._twilio_out_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                self._twilio_out_queue.put_nowait(item)
+            except asyncio.QueueFull:
+                return
+            self._dropped_outbound_audio += 1
+            if self._dropped_outbound_audio % 25 == 0:
+                logger.warning(
+                    "Dropped %d outbound audio chunks due to backpressure (call_sid=%s)",
+                    self._dropped_outbound_audio,
+                    self.call_sid,
+                )
+
     async def _send_audio_to_twilio(self, pcm_24k: bytes) -> None:
         """Convert Gemini PCM24k audio to mulaw and send to Twilio."""
         if not self.stream_sid or self._stopped:
             return
-        payload_b64 = gemini_pcm_to_twilio_mulaw(pcm_24k)
-        msg = {
+
+        encode_started = perf_counter()
+        payload_b64 = await asyncio.to_thread(gemini_pcm_to_twilio_mulaw, pcm_24k)
+        self._record_latency("twilio_mulaw_encode_ms", (perf_counter() - encode_started) * 1000.0)
+
+        msg: dict[str, Any] = {
             "event": "media",
             "streamSid": self.stream_sid,
             "media": {"payload": payload_b64},
         }
+
+        send_started = perf_counter()
         await self.twilio_ws.send_json(msg)
+        self._record_latency("twilio_ws_send_ms", (perf_counter() - send_started) * 1000.0)
+
+        if self._pending_turn_started_at is not None:
+            turn_latency_ms = (perf_counter() - self._pending_turn_started_at) * 1000.0
+            self._record_latency("turn_input_to_first_audio_ms", turn_latency_ms)
+            self._pending_turn_started_at = None
 
     async def _send_clear_to_twilio(self) -> None:
         """Send clear event to interrupt Twilio's audio buffer (barge-in)."""
         if not self.stream_sid or self._stopped:
             return
         msg = {"event": "clear", "streamSid": self.stream_sid}
+        started = perf_counter()
         await self.twilio_ws.send_json(msg)
+        self._record_latency("twilio_clear_send_ms", (perf_counter() - started) * 1000.0)

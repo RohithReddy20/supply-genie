@@ -21,3 +21,21 @@ uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - `POST /api/v1/connectors/slack/notify`
 
 This is setup-only code. No real external side effects are executed yet.
+
+### Voice latency tuning
+Use these environment variables to tune live voice responsiveness:
+
+- `VOICE_THINKING_BUDGET` (default `0`; set `-1` for model automatic thinking)
+- `VOICE_OPENING_PROMPT_DELAY_S` (default `0.03`)
+- `VOICE_AUDIO_BATCH_MS` (default `40`)
+- `VOICE_INBOUND_AUDIO_QUEUE_MAX` (default `24`)
+- `VOICE_OUTBOUND_AUDIO_QUEUE_MAX` (default `24`)
+- `VOICE_VAD_PREFIX_PADDING_MS` (default `60`)
+- `VOICE_VAD_SILENCE_DURATION_MS` (default `260`)
+
+Probe scripts for iterative latency testing:
+
+- Synthetic pipeline + event-loop lag probe:
+	- `/path/to/backend/.venv/bin/python backend/scripts/voice_latency_probe.py`
+- Live Gemini first-audio latency probe:
+	- `/path/to/backend/.venv/bin/python backend/scripts/gemini_live_latency_probe.py`
