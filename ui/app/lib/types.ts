@@ -102,3 +102,50 @@ export interface ChatCommandResponse {
   action_run_id: string | null;
   message: string;
 }
+
+// ── KPI types ────────────────────────────────────────────────────────────
+
+export interface IncidentKPIs {
+  total: number;
+  by_status: Record<string, number>;
+  by_type: Record<string, number>;
+  auto_resolution_rate: number;
+  escalation_rate: number;
+  mean_time_to_resolution_s: number | null;
+}
+
+export interface ActionKPIs {
+  total: number;
+  completed: number;
+  failed: number;
+  pending: number;
+  needs_approval: number;
+  success_rate: number;
+  failure_rate: number;
+  avg_duration_ms: number | null;
+}
+
+export interface ActionTypeBreakdown {
+  action_type: string;
+  total: number;
+  completed: number;
+  failed: number;
+  success_rate: number;
+  avg_duration_ms: number | null;
+}
+
+export interface VoiceKPIs {
+  total_sessions: number;
+  completed_sessions: number;
+  answer_rate: number;
+  avg_duration_s: number | null;
+  total_duration_s: number;
+}
+
+export interface KPIDashboard {
+  incidents: IncidentKPIs;
+  actions: ActionKPIs;
+  action_breakdown: ActionTypeBreakdown[];
+  voice: VoiceKPIs;
+  generated_at: string;
+}

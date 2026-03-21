@@ -150,3 +150,50 @@ class OutboundCallRequest(BaseModel):
     to: str = Field(min_length=5)
     incident_id: UUID | None = None
     greeting: str = Field(default="")
+
+
+# ── KPIs ──────────────────────────────────────────────────────────────────
+
+class IncidentKPIs(BaseModel):
+    total: int
+    by_status: dict[str, int] = {}
+    by_type: dict[str, int] = {}
+    auto_resolution_rate: float
+    escalation_rate: float
+    mean_time_to_resolution_s: float | None = None
+
+
+class ActionKPIs(BaseModel):
+    total: int
+    completed: int
+    failed: int
+    pending: int
+    needs_approval: int
+    success_rate: float
+    failure_rate: float
+    avg_duration_ms: float | None = None
+
+
+class ActionTypeBreakdown(BaseModel):
+    action_type: str
+    total: int
+    completed: int
+    failed: int
+    success_rate: float
+    avg_duration_ms: float | None = None
+
+
+class VoiceKPIs(BaseModel):
+    total_sessions: int
+    completed_sessions: int
+    answer_rate: float
+    avg_duration_s: float | None = None
+    total_duration_s: int
+
+
+class KPIDashboard(BaseModel):
+    incidents: IncidentKPIs
+    actions: ActionKPIs
+    action_breakdown: list[ActionTypeBreakdown]
+    voice: VoiceKPIs
+    generated_at: str

@@ -4,6 +4,7 @@ import type {
   ChatMessageResponse,
   IncidentDetail,
   IncidentListResponse,
+  KPIDashboard,
   PendingApprovalItem,
 } from "./types";
 
@@ -62,6 +63,12 @@ export function retryIncident(
   incidentId: string,
 ): Promise<{ incident_id: string; retried_actions: string[]; count: number }> {
   return request(`/incidents/${incidentId}/retry`, { method: "POST" });
+}
+
+// ── KPIs ─────────────────────────────────────────────────────────────
+
+export function fetchKpis(): Promise<KPIDashboard> {
+  return request("/kpis");
 }
 
 // ── Chat ──────────────────────────────────────────────────────────────

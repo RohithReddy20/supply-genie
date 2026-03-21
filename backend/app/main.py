@@ -3,14 +3,17 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
 from app.config import get_settings
 from app.observability import configure_observability, correlation_id_middleware
-from app.routers import approvals, chat, connectors, health, incidents, orchestrator, voice
+from app.routers import approvals, chat, connectors, health, incidents, kpis, orchestrator, voice
 
 settings = get_settings()
 configure_observability(service_name="happy-robot-backend")
 
 app = FastAPI(title=settings.app_name, version="0.1.0")
+FastAPIInstrumentor.instrument_app(app)
 
 # Order matters: add_middleware builds outward (last added = outermost).
 # CORS must be outermost so it intercepts OPTIONS preflight before routing.
@@ -30,6 +33,7 @@ app.include_router(orchestrator.router, prefix=settings.api_prefix)
 app.include_router(approvals.router, prefix=settings.api_prefix)
 app.include_router(connectors.router, prefix=settings.api_prefix)
 app.include_router(chat.router, prefix=settings.api_prefix)
+app.include_router(kpis.router, prefix=settings.api_prefix)
 app.include_router(voice.router, prefix=settings.api_prefix)
 
 

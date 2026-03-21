@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.models import ActionRun, ActionStatus, ActionType, Incident, POStatus
+from app.observability import trace_action
 from app.services.connectors.email import send_email
 from app.services.connectors.labor_system import update_labor_record
 from app.services.connectors.manager_notify import notify_site_manager
@@ -25,7 +26,17 @@ def execute_pending_actions(db: Session, incident: Incident) -> list[ActionRun]:
         if action.status != ActionStatus.pending:
             continue
 
-        success = _dispatch(db, action, incident)
+        with trace_action(
+            action_type=action.action_type.value,
+            incident_id=str(incident.id),
+            attributes={
+                "action.id": str(action.id),
+                "action.sequence": action.sequence,
+                "action.retry_count": action.retry_count,
+            },
+        ) as trace_result:
+            success = _dispatch(db, action, incident)
+            trace_result["success"] = success
 
         if success:
             action.status = ActionStatus.completed

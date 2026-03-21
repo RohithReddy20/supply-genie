@@ -5,6 +5,7 @@ import { Separator } from "@/components/ui/separator";
 import { IncidentList } from "./components/incident-list";
 import { IncidentContextPanel } from "./components/incident-context-panel";
 import { ChatPanel } from "./components/chat-panel";
+import { KpiBar } from "./components/kpi-bar";
 import { fetchIncident } from "./lib/api";
 import type { IncidentDetail } from "./lib/types";
 import {
@@ -80,6 +81,9 @@ export default function Home() {
           </div>
         </div>
       </header>
+
+      {/* ── KPI metrics bar ── */}
+      <KpiBar />
 
       {/* ── Main workspace: 3 columns ── */}
       <div className="flex flex-1 min-h-0">

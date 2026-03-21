@@ -16,6 +16,7 @@ from app.models import (
     IncidentType,
     Severity,
 )
+from app.observability import record_incident_created
 from app.services.safety import check_human_approval_required
 
 # ── Playbook Definitions ────────────────────────────────────────────────
@@ -89,6 +90,7 @@ def ingest_delay(
 
     db.commit()
     db.refresh(incident)
+    record_incident_created("shipment_delay")
 
     from app.services.action_executor import execute_pending_actions
     execute_pending_actions(db, incident)
@@ -140,6 +142,7 @@ def ingest_absence(
 
     db.commit()
     db.refresh(incident)
+    record_incident_created("worker_absence")
 
     from app.services.action_executor import execute_pending_actions
     execute_pending_actions(db, incident)
