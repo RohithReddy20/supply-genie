@@ -71,26 +71,53 @@ The Supply Chain Coordinator AI Worker is built as a modern, decoupled monorepo.
 
 ---
 
-## Common Commands
+## Setup Instructions
 
-Run these from the repository root.
+### 1. Prerequisites
+- **Node.js**: v18+ (uses `npm` or `pnpm`).
+- **Python**: 3.12+ managed via `uv` (`pip install uv`).
+- **PostgreSQL**: A running local or cloud Postgres instance.
+- **Redis**: A running Redis instance.
 
-### Install dependencies (backend + ui)
+### 2. Environment Variables
+Create a `.env` file in the `backend/` directory with the following keys. You can toggle `TWILIO_MOCK_MODE=True` if you do not want to configure Twilio physical phone calls.
+
+```env
+# Database
+DATABASE_URL=postgresql+psycopg://localhost:5432/happy_robot  # Adjust to your database URI
+
+# LLM / Gemini Models
+VERTEX_AI_KEY=your_vertex_ai_key
+
+# Twilio Voice Config
+TWILIO_ACCOUNT_SID=your_twilio_sid
+TWILIO_AUTH_TOKEN=your_twilio_auth_token
+TWILIO_FROM_NUMBER=+18885551234
+TWILIO_DEFAULT_TO=+18885559876
+TWILIO_MOCK_MODE=false  # Set to true to bypass physical phone calls
+
+# Slack
+SLACK_BOT_TOKEN=xoxb-your-slack-bot-token
+SLACK_DEFAULT_CHANNEL=#ops-alerts
+
+# Resend (Email capability)
+RESEND_API_KEY=re_your_api_key
+```
+
+### 3. Install Dependencies
+Run this from the repository root to install both the Next.js UI and FastAPI backend dependencies:
 ```bash
 npm run setup
 ```
 
-### Run both apps together
+### 4. Running the Application
+To run both the backend and frontend concurrently:
 ```bash
 npm run dev
 ```
 
-### Run services separately
+To run the services separately:
 ```bash
-npm run dev:backend
-npm run dev:ui
+npm run dev:backend  # Runs FastAPI on http://localhost:8000
+npm run dev:ui       # Runs Next.js on http://localhost:3000
 ```
-
-### Notes
-- Backend runs on `http://localhost:8000`.
-- UI runs on `http://localhost:3000`.
