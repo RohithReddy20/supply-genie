@@ -411,9 +411,13 @@ class VoicePipeline:
                 if event == "start":
                     stream_sid = msg["start"]["streamSid"]
                     self.stream_sid = stream_sid
+                    # Capture real Twilio call SID if available
+                    twilio_call_sid = msg["start"].get("callSid")
+                    if twilio_call_sid:
+                        self.call_sid = twilio_call_sid
                     _active_sessions[stream_sid] = self
                     self._stream_ready.set()
-                    logger.info("Twilio stream started: %s", self.stream_sid)
+                    logger.info("Twilio stream started: %s (call_sid=%s)", self.stream_sid, self.call_sid)
 
                 elif event == "media":
                     payload_b64 = msg["media"]["payload"]
@@ -706,6 +710,9 @@ class VoicePipeline:
                 return f"'{label}' could not be executed right now."
 
             return f"Unknown tool: {name}"
+        except Exception:
+            db.rollback()
+            raise
         finally:
             db.close()
 

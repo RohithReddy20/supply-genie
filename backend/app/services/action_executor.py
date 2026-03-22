@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import ActionRun, ActionStatus, ActionType, Incident, POStatus
+from app.models import ActionRun, ActionStatus, ActionType, Incident, IncidentStatus, POStatus
 from app.observability import trace_action
 from app.resilience import backoff_delay_ms, get_fallback_message
 from app.services.connectors.email import send_email
@@ -46,9 +46,12 @@ def execute_pending_actions(db: Session, incident: Incident) -> list[ActionRun]:
         else:
             _handle_failure(action)
 
+        # Commit each action individually so a later failure cannot
+        # roll back an earlier action's successful DB changes (e.g. PO update).
+        db.commit()
         executed.append(action)
 
-    db.commit()
+    _evaluate_incident_lifecycle(db, incident)
     return executed
 
 
@@ -67,7 +70,6 @@ def retry_failed_actions(db: Session, incident: Incident) -> list[ActionRun]:
         if delay_ms > 0:
             time.sleep(delay_ms / 1000.0)
 
-        action.retry_count += 1
         action.status = ActionStatus.pending
         action.error_message = None
         retried.append(action)
@@ -77,6 +79,25 @@ def retry_failed_actions(db: Session, incident: Incident) -> list[ActionRun]:
     if retried:
         return execute_pending_actions(db, incident)
     return []
+
+
+def _evaluate_incident_lifecycle(db: Session, incident: Incident) -> None:
+    """Transition incident status based on action states."""
+    settings = get_settings()
+    terminal = {ActionStatus.completed, ActionStatus.skipped}
+    statuses = [a.status for a in incident.actions]
+
+    if all(s in terminal for s in statuses):
+        incident.status = IncidentStatus.resolved
+        db.commit()
+        logger.info("Incident %s resolved — all actions completed/skipped", incident.id)
+    elif any(
+        s == ActionStatus.failed and a.retry_count >= settings.max_retries
+        for a, s in zip(incident.actions, statuses)
+    ):
+        incident.status = IncidentStatus.escalated
+        db.commit()
+        logger.warning("Incident %s escalated — action(s) exhausted retries", incident.id)
 
 
 def _dispatch(db: Session, action: ActionRun, incident: Incident) -> bool:
@@ -104,10 +125,11 @@ def _dispatch(db: Session, action: ActionRun, incident: Incident) -> bool:
     if action.action_type == ActionType.notify_manager:
         return _execute_notify_manager(action, payload)
 
-    # Remaining action types (escalate_ticket, etc.) — stub for now
-    logger.info("Action %s not yet implemented — marking completed (stub)", action.action_type.value)
-    action.response_payload = {"stub": True}
-    return True
+    # Remaining action types (escalate_ticket, etc.) — not yet implemented
+    logger.warning("Action %s not yet implemented — marking failed", action.action_type.value)
+    action.error_message = f"Action '{action.action_type.value}' is not yet implemented"
+    action.response_payload = {"stub": True, "implemented": False}
+    return False
 
 
 def _execute_slack(action: ActionRun, payload: dict) -> bool:

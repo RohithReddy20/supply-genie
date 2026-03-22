@@ -378,56 +378,63 @@ def process_message(
             ),
         )
 
-        # Handle function calls
-        if response.candidates and response.candidates[0].content:
+        # Handle function calls — loop until the model stops requesting tools
+        MAX_TOOL_ROUNDS = 5
+        for _round in range(MAX_TOOL_ROUNDS):
+            if not (response.candidates and response.candidates[0].content):
+                break
+
             parts = response.candidates[0].content.parts or []
+            fn_calls = [p for p in parts if p.function_call]
 
-            for part in parts:
-                if part.function_call:
-                    fn_name = part.function_call.name
-                    fn_args = dict(part.function_call.args) if part.function_call.args else {}
+            if not fn_calls:
+                break
 
-                    logger.info("Tool call: %s(%s)", fn_name, fn_args)
+            # Execute every tool call in this response
+            tool_response_parts: list[types.Part] = []
+            for part in fn_calls:
+                fn_name = part.function_call.name
+                fn_args = dict(part.function_call.args) if part.function_call.args else {}
 
-                    # Execute the tool
-                    if fn_name == "execute_command":
-                        tool_result, actions = _handle_execute_command(db, incident, fn_args)
-                        proposed_actions.extend(actions)
-                    elif fn_name == "get_incident_status":
-                        tool_result = _handle_get_incident_status(db, incident, fn_args)
-                    elif fn_name == "list_active_shipments":
-                        tool_result = _handle_list_active_shipments(db, fn_args)
-                    else:
-                        tool_result = f"Unknown tool: {fn_name}"
+                logger.info("Tool call: %s(%s)", fn_name, fn_args)
 
-                    # Send tool result back to model for final response
-                    contents.append(response.candidates[0].content)
-                    contents.append(
-                        types.Content(
-                            role="user",
-                            parts=[
-                                types.Part.from_function_response(
-                                    name=fn_name,
-                                    response={"result": tool_result},
-                                )
-                            ],
-                        )
+                if fn_name == "execute_command":
+                    tool_result, actions = _handle_execute_command(db, incident, fn_args)
+                    proposed_actions.extend(actions)
+                elif fn_name == "get_incident_status":
+                    tool_result = _handle_get_incident_status(db, incident, fn_args)
+                elif fn_name == "list_active_shipments":
+                    tool_result = _handle_list_active_shipments(db, fn_args)
+                else:
+                    tool_result = f"Unknown tool: {fn_name}"
+
+                tool_response_parts.append(
+                    types.Part.from_function_response(
+                        name=fn_name,
+                        response={"result": tool_result},
                     )
+                )
 
-                    followup = client.models.generate_content(
-                        model=settings.gemini_model,
-                        contents=contents,
-                        config=types.GenerateContentConfig(
-                            system_instruction=full_system,
-                            temperature=0.3,
-                        ),
-                    )
-                    reply_text = followup.text or "Done."
+            # Send all tool results back to the model
+            contents.append(response.candidates[0].content)
+            contents.append(types.Content(role="user", parts=tool_response_parts))
 
-                    return ChatResponse(reply=reply_text, proposed_actions=proposed_actions)
+            response = client.models.generate_content(
+                model=settings.gemini_model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=full_system,
+                    tools=TOOLS,
+                    temperature=0.3,
+                ),
+            )
 
-        # No function calls — plain text response
-        reply_text = response.text or "I'm not sure how to help with that. Could you rephrase?"
+        # Extract final text reply
+        reply_text = (
+            response.text
+            if (response.candidates and response.candidates[0].content)
+            else None
+        ) or "I'm not sure how to help with that. Could you rephrase?"
 
         return ChatResponse(reply=reply_text, proposed_actions=proposed_actions)
 

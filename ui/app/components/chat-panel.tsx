@@ -25,12 +25,10 @@ function formatTime(iso: string): string {
 
 function ProposedActionCard({
   action,
-  onApprove,
-  approving,
 }: {
   action: ProposedAction;
-  onApprove: (action: ProposedAction) => void;
-  approving: boolean;
+  onApprove?: (action: ProposedAction) => void;
+  approving?: boolean;
 }) {
   return (
     <div className="flex items-center gap-3 w-full px-3 py-2.5 bg-card border border-amber-200 rounded-lg mt-2 text-left">
@@ -121,7 +119,7 @@ export function ChatPanel({
       setSending(false);
       inputRef.current?.focus();
     }
-  }, [input, sending, messages, incidentId]);
+  }, [input, sending, messages, incidentId, onActionExecuted]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {

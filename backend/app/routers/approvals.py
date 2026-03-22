@@ -5,6 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -33,7 +34,7 @@ class ApprovalItemOut(BaseModel):
 
 
 @router.get("/pending")
-async def list_pending_approvals(db: Session = Depends(get_db)) -> dict:
+def list_pending_approvals(db: Session = Depends(get_db)) -> dict:
     approvals = (
         db.query(Approval)
         .filter(Approval.status == ApprovalStatus.pending)
@@ -60,7 +61,7 @@ async def list_pending_approvals(db: Session = Depends(get_db)) -> dict:
 
 
 @router.post("/{approval_id}/decide")
-async def decide_approval(
+def decide_approval(
     approval_id: UUID,
     body: ApprovalDecisionIn,
     db: Session = Depends(get_db),
@@ -69,20 +70,37 @@ async def decide_approval(
     if not approval:
         raise HTTPException(status_code=404, detail="Approval not found")
 
-    if approval.status != ApprovalStatus.pending:
+    now = datetime.now(timezone.utc)
+    new_status = (
+        ApprovalStatus.approved if body.decision == "approved" else ApprovalStatus.rejected
+    )
+
+    # Atomic compare-and-swap: only update if still pending.
+    # This prevents double-execution when two requests race.
+    rows = db.execute(
+        update(Approval)
+        .where(Approval.id == approval_id, Approval.status == ApprovalStatus.pending)
+        .values(
+            status=new_status,
+            decided_at=now,
+            decided_by=body.decided_by,
+            reason=body.reason,
+        )
+    ).rowcount
+    db.flush()
+
+    if rows == 0:
+        # Re-read to get the current status for the error message
+        db.refresh(approval)
         raise HTTPException(
             status_code=409,
             detail=f"Approval already decided: {approval.status.value}",
         )
 
+    db.refresh(approval)
     action = approval.action_run
-    now = datetime.now(timezone.utc)
 
     if body.decision == "approved":
-        approval.status = ApprovalStatus.approved
-        approval.decided_at = now
-        approval.decided_by = body.decided_by
-        approval.reason = body.reason
         action.status = ActionStatus.pending
         db.commit()
 
@@ -93,10 +111,6 @@ async def decide_approval(
 
         next_status = action.status.value
     else:
-        approval.status = ApprovalStatus.rejected
-        approval.decided_at = now
-        approval.decided_by = body.decided_by
-        approval.reason = body.reason
         action.status = ActionStatus.skipped
         db.commit()
         next_status = "skipped"

@@ -28,7 +28,7 @@ router = APIRouter(prefix="/incidents", tags=["incidents"])
 
 
 @router.post("/delay", response_model=IncidentCreatedResponse)
-async def create_delay_incident(
+def create_delay_incident(
     payload: DelayEventIn,
     request: Request,
     response: Response,
@@ -59,7 +59,7 @@ async def create_delay_incident(
 
 
 @router.post("/absence", response_model=IncidentCreatedResponse)
-async def create_absence_incident(
+def create_absence_incident(
     payload: AbsenceEventIn,
     request: Request,
     response: Response,
@@ -91,7 +91,7 @@ async def create_absence_incident(
 
 
 @router.get("", response_model=IncidentListOut)
-async def list_all_incidents(
+def list_all_incidents(
     db: Session = Depends(get_db),
     status: IncidentStatus | None = None,
     type: IncidentType | None = None,
@@ -110,7 +110,7 @@ async def list_all_incidents(
 
 
 @router.get("/{incident_id}", response_model=IncidentDetailOut)
-async def get_incident_detail(
+def get_incident_detail(
     incident_id: UUID,
     db: Session = Depends(get_db),
 ) -> IncidentDetailOut:
@@ -121,7 +121,7 @@ async def get_incident_detail(
 
 
 @router.post("/{incident_id}/retry")
-async def retry_incident_actions(
+def retry_incident_actions(
     incident_id: UUID,
     db: Session = Depends(get_db),
 ) -> dict:

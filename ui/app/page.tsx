@@ -37,9 +37,14 @@ export default function Home() {
   }, [selectedId]);
 
   useEffect(() => {
-    loadIncident();
     const interval = setInterval(loadIncident, 3000);
-    return () => clearInterval(interval);
+    // Trigger initial load via a zero-delay timeout to avoid synchronous
+    // setState inside the effect body (react-hooks/set-state-in-effect).
+    const immediate = setTimeout(loadIncident, 0);
+    return () => {
+      clearInterval(interval);
+      clearTimeout(immediate);
+    };
   }, [loadIncident]);
 
   return (

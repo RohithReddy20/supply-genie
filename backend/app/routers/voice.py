@@ -159,16 +159,33 @@ def _persist_session(pipeline: VoicePipeline) -> None:
 
     db = SessionLocal()
     try:
-        vs = VoiceSession(
-            call_sid=pipeline.call_sid,
-            stream_sid=pipeline.stream_sid,
-            incident_id=pipeline.incident_id,
-            correlation_id=pipeline.correlation_id,
-            direction="inbound",
-            status="completed",
-            ended_at=datetime.now(timezone.utc),
+        # Check if an outbound session already exists for this call SID
+        # (created by the /outbound endpoint before the WebSocket connected).
+        vs = (
+            db.query(VoiceSession)
+            .filter(VoiceSession.call_sid == pipeline.call_sid)
+            .first()
         )
-        db.add(vs)
+
+        if vs:
+            # Update the existing outbound session with stream details
+            vs.stream_sid = pipeline.stream_sid
+            vs.correlation_id = pipeline.correlation_id
+            vs.status = "completed"
+            vs.ended_at = datetime.now(timezone.utc)
+        else:
+            # No pre-existing session — this is an inbound call
+            vs = VoiceSession(
+                call_sid=pipeline.call_sid,
+                stream_sid=pipeline.stream_sid,
+                incident_id=pipeline.incident_id,
+                correlation_id=pipeline.correlation_id,
+                direction="inbound",
+                status="completed",
+                ended_at=datetime.now(timezone.utc),
+            )
+            db.add(vs)
+
         db.flush()
 
         for entry in pipeline.transcript:
@@ -181,8 +198,9 @@ def _persist_session(pipeline: VoicePipeline) -> None:
 
         db.commit()
         logger.info(
-            "Persisted voice session %s with %d transcript events",
+            "Persisted voice session %s (%s) with %d transcript events",
             vs.id,
+            vs.direction,
             len(pipeline.transcript),
         )
     except Exception:

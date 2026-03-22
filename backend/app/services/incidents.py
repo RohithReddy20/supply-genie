@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -80,7 +81,15 @@ def ingest_delay(
         },
     )
     db.add(incident)
-    db.flush()
+
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        existing = find_by_idempotency_key(db, idempotency_key)
+        if existing:
+            return existing, True
+        raise
 
     _create_action_runs(
         db,
@@ -132,7 +141,15 @@ def ingest_absence(
         },
     )
     db.add(incident)
-    db.flush()
+
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        existing = find_by_idempotency_key(db, idempotency_key)
+        if existing:
+            return existing, True
+        raise
 
     _create_action_runs(
         db,
@@ -202,7 +219,7 @@ def list_incidents(
     offset: int = 0,
 ) -> tuple[list[Incident], int]:
     query = select(Incident).order_by(Incident.created_at.desc())
-    count_query = select(Incident)
+    count_query = select(func.count(Incident.id))
 
     if status:
         query = query.where(Incident.status == status)
@@ -211,6 +228,6 @@ def list_incidents(
         query = query.where(Incident.type == incident_type)
         count_query = count_query.where(Incident.type == incident_type)
 
-    total = len(db.scalars(count_query).all())
+    total = db.scalar(count_query) or 0
     items = list(db.scalars(query.limit(limit).offset(offset)).all())
     return items, total

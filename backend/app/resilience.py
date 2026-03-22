@@ -26,16 +26,18 @@ class ConnectorTimeout(Exception):
         super().__init__(f"{connector} timed out after {timeout_s}s")
 
 
+import concurrent.futures
+
+_timeout_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+
+
 def with_timeout(func: Callable[..., T], timeout_s: float, connector_name: str, *args: Any, **kwargs: Any) -> T:
     """Run a synchronous function with a thread-based timeout."""
-    import concurrent.futures
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(func, *args, **kwargs)
-        try:
-            return future.result(timeout=timeout_s)
-        except concurrent.futures.TimeoutError:
-            raise ConnectorTimeout(connector_name, timeout_s)
+    future = _timeout_pool.submit(func, *args, **kwargs)
+    try:
+        return future.result(timeout=timeout_s)
+    except concurrent.futures.TimeoutError:
+        raise ConnectorTimeout(connector_name, timeout_s)
 
 
 # ── Exponential backoff with jitter ──────────────────────────────────────

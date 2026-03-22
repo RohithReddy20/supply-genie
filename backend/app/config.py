@@ -47,8 +47,7 @@ class Settings:
     environment: str = os.getenv("APP_ENV", "development")
     api_prefix: str = os.getenv("API_PREFIX", "/api/v1")
     database_url: str = os.getenv(
-        "DATABASE_URL",
-        "postgresql+psycopg://rohith:Rohith%4018@localhost:5432/happy_robot",
+        "DATABASE_URL", "postgresql+psycopg://localhost:5432/happy_robot"
     )
     require_human_approval: bool = _env_bool("REQUIRE_HUMAN_APPROVAL", True)
 

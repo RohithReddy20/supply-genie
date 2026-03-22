@@ -588,8 +588,8 @@ class TestChatCommandEndpoint:
         assert r.status_code == 200
         data = r.json()
         assert data["action_run_id"] is not None
-        # escalate_ticket is a stub, should complete
-        assert data["status"] == "executed"
+        # escalate_ticket is not yet implemented — should report failure
+        assert data["status"] == "failed"
 
     def test_command_retrigger_failed(self, client, db, delay_incident):
         """A failed action can be retriggered via command."""
