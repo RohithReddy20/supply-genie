@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any
 
 from google import genai
 from google.genai import types
@@ -31,6 +32,64 @@ Extract the following structured information. Return ONLY valid JSON, no markdow
 
 Transcript:
 """
+
+SUMMARY_SCHEMA: dict[str, Any] = {
+    "type": "OBJECT",
+    "properties": {
+        "call_outcome": {"type": "STRING"},
+        "confirmed_root_cause": {"type": "STRING", "nullable": True},
+        "updated_eta": {"type": "STRING", "nullable": True},
+        "action_items": {"type": "ARRAY", "items": {"type": "STRING"}},
+        "escalation_needed": {"type": "BOOLEAN"},
+        "escalation_reason": {"type": "STRING", "nullable": True},
+        "cooperation_level": {"type": "STRING"},
+        "key_findings": {"type": "ARRAY", "items": {"type": "STRING"}},
+    },
+    "required": [
+        "call_outcome",
+        "confirmed_root_cause",
+        "updated_eta",
+        "action_items",
+        "escalation_needed",
+        "escalation_reason",
+        "cooperation_level",
+        "key_findings",
+    ],
+}
+
+
+def _default_summary(error: str | None = None) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "call_outcome": "Summarization failed — review transcript manually",
+        "confirmed_root_cause": None,
+        "updated_eta": None,
+        "action_items": [],
+        "escalation_needed": False,
+        "escalation_reason": None,
+        "cooperation_level": "unknown",
+        "key_findings": [],
+    }
+    if error:
+        summary["error"] = error
+    return summary
+
+
+def _normalize_summary(value: dict[str, Any]) -> dict[str, Any]:
+    """Force expected keys/types so downstream storage/slack stays stable."""
+    return {
+        "call_outcome": str(value.get("call_outcome") or "No summary available"),
+        "confirmed_root_cause": value.get("confirmed_root_cause"),
+        "updated_eta": value.get("updated_eta"),
+        "action_items": [
+            str(item) for item in (value.get("action_items") or []) if str(item).strip()
+        ],
+        "escalation_needed": bool(value.get("escalation_needed", False)),
+        "escalation_reason": value.get("escalation_reason"),
+        "cooperation_level": str(value.get("cooperation_level") or "unknown"),
+        "key_findings": [
+            str(item) for item in (value.get("key_findings") or []) if str(item).strip()
+        ],
+    }
 
 
 def summarize_and_notify(
@@ -71,25 +130,23 @@ def summarize_and_notify(
             model=settings.gemini_model,
             contents=SUMMARY_PROMPT + transcript_text,
             config=types.GenerateContentConfig(
-                temperature=0.2,
-                max_output_tokens=1024,
+                temperature=0.0,
+                max_output_tokens=768,
+                response_mime_type="application/json",
+                response_schema=SUMMARY_SCHEMA,
             ),
         )
-
-        raw_text = response.text.strip()
-        # Strip markdown code fences if present
-        if raw_text.startswith("```"):
-            raw_text = raw_text.split("\n", 1)[-1]
-            if raw_text.endswith("```"):
-                raw_text = raw_text[:-3].strip()
-
-        summary = json.loads(raw_text)
-    except (json.JSONDecodeError, Exception) as exc:
+        parsed = getattr(response, "parsed", None)
+        if isinstance(parsed, dict):
+            summary = _normalize_summary(parsed)
+        elif parsed is not None and hasattr(parsed, "model_dump"):
+            summary = _normalize_summary(parsed.model_dump())
+        else:
+            raw_text = (response.text or "").strip()
+            summary = _normalize_summary(json.loads(raw_text))
+    except Exception as exc:
         logger.error("Failed to parse call summary: %s", exc)
-        summary = {
-            "call_outcome": "Summarization failed — review transcript manually",
-            "error": str(exc),
-        }
+        summary = _default_summary(str(exc))
 
     # Store summary on the voice session
     vs = db.get(VoiceSession, voice_session_id)

@@ -36,6 +36,12 @@ class AbsenceEventIn(BaseModel):
     source: str = Field(default="hr_webhook", min_length=2)
 
 
+class ActionsSummary(BaseModel):
+    total: int = 0
+    completed: int = 0
+    needs_approval: int = 0
+
+
 class IncidentOut(BaseModel):
     model_config = {"from_attributes": True}
 
@@ -45,7 +51,9 @@ class IncidentOut(BaseModel):
     status: IncidentStatus
     severity: Severity
     correlation_id: UUID
+    payload: dict | None = None
     created_at: datetime
+    actions_summary: ActionsSummary | None = None
 
 
 class IncidentCreatedResponse(BaseModel):

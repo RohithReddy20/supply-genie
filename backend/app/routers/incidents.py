@@ -8,8 +8,10 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.database import get_db
 from app.models import IncidentStatus, IncidentType
+from app.models import ActionStatus as ActionStatusEnum
 from app.schemas import (
     AbsenceEventIn,
+    ActionsSummary,
     DelayEventIn,
     IncidentCreatedResponse,
     IncidentDetailOut,
@@ -25,6 +27,22 @@ from app.services.incidents import (
 )
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
+
+
+def _build_actions_summary(incident) -> ActionsSummary:
+    """Build action counts from eager-loaded actions relationship."""
+    actions = incident.actions or []
+    return ActionsSummary(
+        total=len(actions),
+        completed=sum(1 for a in actions if a.status == ActionStatusEnum.completed),
+        needs_approval=sum(1 for a in actions if a.status == ActionStatusEnum.needs_approval),
+    )
+
+
+def _incident_out_with_summary(incident) -> IncidentOut:
+    out = IncidentOut.model_validate(incident)
+    out.actions_summary = _build_actions_summary(incident)
+    return out
 
 
 @router.post("/delay", response_model=IncidentCreatedResponse)
@@ -53,7 +71,7 @@ def create_delay_incident(
 
     response.status_code = 200 if is_duplicate else 201
     return IncidentCreatedResponse(
-        incident=IncidentOut.model_validate(incident),
+        incident=_incident_out_with_summary(incident),
         is_duplicate=is_duplicate,
     )
 
@@ -85,7 +103,7 @@ def create_absence_incident(
 
     response.status_code = 200 if is_duplicate else 201
     return IncidentCreatedResponse(
-        incident=IncidentOut.model_validate(incident),
+        incident=_incident_out_with_summary(incident),
         is_duplicate=is_duplicate,
     )
 
@@ -102,7 +120,7 @@ def list_all_incidents(
         db, status=status, incident_type=type, limit=min(limit, 100), offset=offset,
     )
     return IncidentListOut(
-        items=[IncidentOut.model_validate(i) for i in items],
+        items=[_incident_out_with_summary(i) for i in items],
         total=total,
         limit=limit,
         offset=offset,

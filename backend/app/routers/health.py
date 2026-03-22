@@ -40,7 +40,10 @@ async def readiness() -> dict[str, Any]:
     checks["circuit_breakers"] = cb_status
 
     # Voice sessions
-    from app.services.voice_session import _active_sessions
+    try:
+        from app.services.voice_session import _active_sessions
+    except ImportError:
+        _active_sessions = {}
     checks["active_voice_sessions"] = len(_active_sessions)
 
     all_ok = checks["database"] == "ok" and all(

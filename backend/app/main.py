@@ -74,9 +74,10 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("Shutting down %s — draining active voice sessions", settings.app_name)
-    from app.services.voice_session import _active_sessions
-    for sid, pipeline in list(_active_sessions.items()):
-        pipeline._stopped = True
+    from app.services.voice_pipeline import get_active_sessions
+    for sid, session in list(get_active_sessions().items()):
+        if session._lifecycle:
+            session._lifecycle.mark_closed()
     logger.info("Shutdown complete")
 
 

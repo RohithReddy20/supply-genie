@@ -41,6 +41,12 @@ export interface ActionRun {
   approval: Approval | null;
 }
 
+export interface ActionsSummary {
+  total: number;
+  completed: number;
+  needs_approval: number;
+}
+
 export interface IncidentSummary {
   id: string;
   idempotency_key: string;
@@ -48,7 +54,9 @@ export interface IncidentSummary {
   status: IncidentStatus;
   severity: Severity;
   correlation_id: string;
+  payload: Record<string, unknown> | null;
   created_at: string;
+  actions_summary: ActionsSummary | null;
 }
 
 export interface IncidentDetail extends IncidentSummary {

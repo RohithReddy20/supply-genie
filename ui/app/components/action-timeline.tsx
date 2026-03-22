@@ -18,42 +18,42 @@ const ACTION_META: Record<
   { label: string; icon: React.ElementType; description: string }
 > = {
   slack_notify: {
-    label: "Slack notification",
+    label: "Notify ops channel",
     icon: MessageSquare,
-    description: "Shipment status",
+    description: "Slack alert to ops channel",
   },
   call_production: {
-    label: "Call production",
+    label: "Call supplier",
     icon: Phone,
-    description: "Confirm status",
+    description: "Call production line for ETA",
   },
   call_contractor: {
-    label: "Call contractors",
+    label: "Call agency",
     icon: HardHat,
-    description: "Find replacement",
+    description: "Request replacement worker",
   },
   update_po: {
-    label: "Update PO documents",
+    label: "Amend PO",
     icon: FileText,
-    description: "Update documentation",
+    description: "Update ERP/TMS documents",
   },
   update_labor: {
-    label: "Update system",
+    label: "Update roster",
     icon: Wrench,
-    description: "Labor planning",
+    description: "Adjust labor planning system",
   },
   email_customer: {
     label: "Email customer",
     icon: Mail,
-    description: "Share update",
+    description: "Send revised timeline",
   },
   notify_manager: {
-    label: "Notify site manager",
+    label: "Alert manager",
     icon: Users,
-    description: "Workforce update",
+    description: "Notify site manager",
   },
   escalate_ticket: {
-    label: "Escalate ticket",
+    label: "Escalate",
     icon: AlertTriangle,
     description: "Create support ticket",
   },
@@ -87,14 +87,18 @@ function formatTime(iso: string | null): string {
   });
 }
 
+function formatDuration(start: string | null, end: string | null): string | null {
+  if (!start || !end) return null;
+  const ms = new Date(end).getTime() - new Date(start).getTime();
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${(ms / 60000).toFixed(1)}m`;
+}
+
 export function ActionTimeline({
   actions,
-  onApprove,
-  onReject,
 }: {
   actions: ActionRun[];
-  onApprove?: (approvalId: string) => void;
-  onReject?: (approvalId: string) => void;
 }) {
   const sorted = [...actions].sort((a, b) => a.sequence - b.sequence);
 
@@ -108,6 +112,7 @@ export function ActionTimeline({
         };
         const Icon = meta.icon;
         const isLast = idx === sorted.length - 1;
+        const duration = formatDuration(action.started_at, action.completed_at);
 
         return (
           <div key={action.id} className="relative flex items-start gap-4 pb-6">
@@ -137,14 +142,16 @@ export function ActionTimeline({
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
+                  {duration && (
+                    <span className="text-xs text-muted-foreground tabular-nums">
+                      {duration}
+                    </span>
+                  )}
                   {action.completed_at && (
                     <span className="text-xs text-muted-foreground">
                       {formatTime(action.completed_at)}
                     </span>
                   )}
-                  <span className="text-xs text-muted-foreground font-mono">
-                    {action.sequence}
-                  </span>
                 </div>
               </div>
 
@@ -161,29 +168,6 @@ export function ActionTimeline({
                   </span>
                 )}
               </div>
-
-              {/* Approval controls */}
-              {action.status === "needs_approval" && action.approval && (
-                <div className="flex items-center gap-2 mt-3 pt-3 border-t border-border">
-                  <span className="text-xs text-muted-foreground">
-                    Requires operator approval
-                  </span>
-                  <div className="ml-auto flex gap-2">
-                    <button
-                      onClick={() => onApprove?.(action.approval!.id)}
-                      className="px-3 py-1 text-xs font-medium bg-[#5c6b55] text-white rounded-md hover:bg-[#4a5945] transition-colors"
-                    >
-                      Approve
-                    </button>
-                    <button
-                      onClick={() => onReject?.(action.approval!.id)}
-                      className="px-3 py-1 text-xs font-medium bg-white text-foreground border border-border rounded-md hover:bg-muted transition-colors"
-                    >
-                      Reject
-                    </button>
-                  </div>
-                </div>
-              )}
 
               {/* Approved/rejected info */}
               {action.approval &&

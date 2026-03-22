@@ -74,16 +74,7 @@ class Settings:
     )
 
     # Voice latency tuning
-    voice_opening_prompt_delay_s: float = _env_float(
-        "VOICE_OPENING_PROMPT_DELAY_S", 0.03, min_value=0.0
-    )
-    voice_audio_batch_ms: int = _env_int("VOICE_AUDIO_BATCH_MS", 40, min_value=10)
-    voice_inbound_audio_queue_max: int = _env_int(
-        "VOICE_INBOUND_AUDIO_QUEUE_MAX", 24, min_value=2
-    )
-    voice_outbound_audio_queue_max: int = _env_int(
-        "VOICE_OUTBOUND_AUDIO_QUEUE_MAX", 24, min_value=2
-    )
+
 
     # Gemini Live VAD tuning
     voice_vad_start_sensitivity: str = os.getenv(
@@ -98,7 +89,6 @@ class Settings:
     voice_vad_silence_duration_ms: int = _env_int(
         "VOICE_VAD_SILENCE_DURATION_MS", 260, min_value=100
     )
-    voice_thinking_budget: int = _env_int("VOICE_THINKING_BUDGET", 0)
 
     # Retry & backoff
     max_retries: int = _env_int("MAX_RETRIES", 3, min_value=1)
@@ -127,7 +117,9 @@ class Settings:
 
     # Voice pipeline resilience
     voice_session_timeout_s: float = _env_float("VOICE_SESSION_TIMEOUT_S", 300.0, min_value=30.0)
-    voice_gemini_reconnect_attempts: int = _env_int("VOICE_GEMINI_RECONNECT_ATTEMPTS", 2, min_value=0)
+    voice_graceful_close_timeout_s: float = _env_float(
+        "VOICE_GRACEFUL_CLOSE_TIMEOUT_S", 15.0, min_value=5.0
+    )
 
 
 def get_settings() -> Settings:

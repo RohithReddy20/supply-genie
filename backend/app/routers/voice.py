@@ -16,7 +16,7 @@ from app.config import get_settings
 from app.database import get_db
 from app.models import Incident, TranscriptEvent, VoiceSession
 from app.schemas import OutboundCallRequest, TranscriptEventOut, VoiceSessionOut
-from app.services.voice_session import VoicePipeline
+from app.services.voice_pipeline import VoicePipelineSession
 
 logger = logging.getLogger("backend.voice_router")
 
@@ -138,7 +138,7 @@ async def media_stream_websocket(
     await websocket.accept()
     print(f"\n>>> WEBSOCKET CONNECTED: query incident_id={incident_id!r}, greeting={greeting!r}\n", flush=True)
 
-    pipeline = VoicePipeline(
+    pipeline = VoicePipelineSession(
         websocket,
         call_sid=f"ws_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
         incident_id=incident_id,
@@ -152,7 +152,7 @@ async def media_stream_websocket(
         _persist_session(pipeline)
 
 
-def _persist_session(pipeline: VoicePipeline) -> None:
+def _persist_session(pipeline: VoicePipelineSession) -> None:
     """Save voice session and transcript events to the database."""
     from app.database import SessionLocal
 
