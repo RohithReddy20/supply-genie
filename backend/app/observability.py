@@ -37,8 +37,10 @@ def configure_observability(service_name: str) -> None:
     resource = Resource.create({"service.name": service_name})
 
     # Tracing
+    import os
     provider = TracerProvider(resource=resource)
-    provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
+    if os.getenv("OTEL_TRACES_CONSOLE", "0") in ("1", "true"):
+        provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
     trace.set_tracer_provider(provider)
     _tracer = trace.get_tracer(service_name)
 
