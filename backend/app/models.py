@@ -210,6 +210,7 @@ class VoiceSession(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    summary: Mapped[dict | None] = mapped_column(JSON, default=None)
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON, default=None)
 
     incident: Mapped[Incident | None] = relationship()

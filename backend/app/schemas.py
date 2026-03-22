@@ -135,6 +135,7 @@ class VoiceSessionOut(BaseModel):
     started_at: datetime
     ended_at: datetime | None = None
     duration_seconds: int | None = None
+    summary: dict | None = None
 
 
 class TranscriptEventOut(BaseModel):

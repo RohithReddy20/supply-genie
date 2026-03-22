@@ -108,10 +108,10 @@ def _dispatch(db: Session, action: ActionRun, incident: Incident) -> bool:
         return _execute_slack(action, payload)
 
     if action.action_type == ActionType.call_production:
-        return _execute_call(action, payload, call_type="production")
+        return _execute_call(db, action, payload, call_type="production")
 
     if action.action_type == ActionType.call_contractor:
-        return _execute_call(action, payload, call_type="contractor")
+        return _execute_call(db, action, payload, call_type="contractor")
 
     if action.action_type == ActionType.update_po:
         return _execute_po_update(db, action, payload)
@@ -168,14 +168,33 @@ def _execute_slack(action: ActionRun, payload: dict) -> bool:
     return True
 
 
-def _execute_call(action: ActionRun, payload: dict, call_type: str) -> bool:
+def _execute_call(db: Session, action: ActionRun, payload: dict, call_type: str) -> bool:
+    import uuid as _uuid
+
+    from app.models import Supplier
+
     settings = get_settings()
 
     if call_type == "production":
         po_number = payload.get("po_number", "N/A")
         delay_reason = payload.get("delay_reason", "Unknown")
         new_eta = payload.get("new_eta", "TBD")
-        to = payload.get("supplier_phone") or settings.twilio_default_to
+
+        # Look up supplier phone from DB using supplier_id
+        to = payload.get("supplier_phone") or ""
+        if not to:
+            supplier_id = payload.get("supplier_id")
+            if supplier_id:
+                try:
+                    sid = _uuid.UUID(str(supplier_id))
+                except ValueError:
+                    sid = None
+                if sid:
+                    supplier = db.query(Supplier).filter(Supplier.id == sid).first()
+                    if supplier:
+                        to = supplier.contact_phone
+        to = to or settings.twilio_default_to
+
         message = (
             f"This is an automated message from the Supply Chain Coordinator. "
             f"Purchase order {po_number} has experienced a delay due to {delay_reason}. "
@@ -187,7 +206,22 @@ def _execute_call(action: ActionRun, payload: dict, call_type: str) -> bool:
         site_id = payload.get("site_id", "N/A")
         role = payload.get("role", "general")
         shift_date = payload.get("shift_date", "TBD")
-        to = payload.get("contractor_phone") or settings.twilio_default_to
+
+        # Look up contractor phone from DB using contractor_id
+        to = payload.get("contractor_phone") or ""
+        if not to:
+            contractor_id = payload.get("contractor_id")
+            if contractor_id:
+                try:
+                    cid = _uuid.UUID(str(contractor_id))
+                except ValueError:
+                    cid = None
+                if cid:
+                    contractor = db.query(Supplier).filter(Supplier.id == cid).first()
+                    if contractor:
+                        to = contractor.contact_phone
+        to = to or settings.twilio_default_to
+
         message = (
             f"This is an automated message from the Supply Chain Coordinator. "
             f"We have an urgent staffing need at site {site_id} for a {role} position "

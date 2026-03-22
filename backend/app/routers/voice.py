@@ -44,11 +44,11 @@ async def handle_incoming_call(
 
     host = request.url.hostname
     ws_url = f"wss://{host}/api/v1/voice/media-stream"
-    if incident_id:
-        ws_url += f"?incident_id={incident_id}"
 
     connect = Connect()
-    connect.stream(url=ws_url)
+    stream = connect.stream(url=ws_url)
+    if incident_id:
+        stream.parameter(name="incident_id", value=incident_id)
     response.append(connect)
 
     return Response(content=str(response), media_type="application/xml")
@@ -83,21 +83,16 @@ def initiate_outbound_call(
 
     host = request.url.hostname
     ws_url = f"wss://{host}/api/v1/voice/media-stream"
-    params = []
-    if body.incident_id:
-        params.append(f"incident_id={body.incident_id}")
-    if body.greeting:
-        params.append(f"greeting={body.greeting}")
-    if params:
-        ws_url += "?" + "&".join(params)
 
     twiml = VoiceResponse()
-    twiml.say(
-        "Please hold while we connect you to the coordinator.",
-        voice="Google.en-US-Chirp3-HD-Aoede",
-    )
     connect = Connect()
-    connect.stream(url=ws_url)
+    stream = connect.stream(url=ws_url)
+    # Twilio <Stream> strips query params — use <Parameter> instead.
+    # These arrive in the WebSocket "start" message under start.customParameters.
+    if body.incident_id:
+        stream.parameter(name="incident_id", value=str(body.incident_id))
+    if body.greeting:
+        stream.parameter(name="greeting", value=body.greeting)
     twiml.append(connect)
 
     client = TwilioClient(settings.twilio_account_sid, settings.twilio_auth_token)
@@ -135,9 +130,13 @@ async def media_stream_websocket(
     """Bidirectional WebSocket endpoint for Twilio Media Streams.
 
     Bridges Twilio audio ↔ Gemini Live API for real-time voice interaction.
+    Twilio <Stream> drops query params, so incident_id/greeting may arrive
+    via customParameters in the "start" event instead. We create the pipeline
+    with query-param values first, then patch from customParameters when the
+    start event arrives (handled inside VoicePipeline._receive_from_twilio).
     """
     await websocket.accept()
-    logger.info("Media stream WebSocket accepted (incident_id=%s)", incident_id)
+    print(f"\n>>> WEBSOCKET CONNECTED: query incident_id={incident_id!r}, greeting={greeting!r}\n", flush=True)
 
     pipeline = VoicePipeline(
         websocket,
@@ -203,6 +202,20 @@ def _persist_session(pipeline: VoicePipeline) -> None:
             vs.direction,
             len(pipeline.transcript),
         )
+
+        # Post-call summarization and notification
+        if pipeline.transcript:
+            try:
+                from app.services.call_summary import summarize_and_notify
+
+                summarize_and_notify(
+                    db,
+                    voice_session_id=vs.id,
+                    transcript=pipeline.transcript,
+                    incident_id=pipeline.incident_id,
+                )
+            except Exception:
+                logger.exception("Post-call summarization failed (non-fatal)")
     except Exception:
         logger.exception("Failed to persist voice session")
         db.rollback()

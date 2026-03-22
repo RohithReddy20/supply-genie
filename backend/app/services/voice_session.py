@@ -53,6 +53,68 @@ Tone: Brief, direct, conversational. Speak naturally for a phone call — \
 short sentences, no markdown or bullet points. Be warm but efficient.\
 """
 
+OUTBOUND_DELAY_PROMPT = """\
+You are a Supply Chain Coordinator AI worker for HappyRobot. You have placed \
+an outbound call to a supplier about a shipment delay incident. You are the \
+one who initiated this call — lead the conversation.
+
+## Incident Details
+- PO Number: {po_number}
+- Delay Reason: {delay_reason}
+- Revised ETA: {new_eta}
+- Severity: {severity}
+
+## Your Objectives
+1. Introduce yourself and state the reason for the call (the PO and delay).
+2. Confirm the root cause of the delay with the supplier.
+3. Get a realistic updated ETA from their side.
+4. Ask what mitigation steps they are taking.
+5. Ask if there is risk of further delays.
+6. Summarize what you learned and let them know next steps.
+
+## Rules
+- You already know the incident details above — do NOT ask the supplier to \
+  explain the situation to you.
+- Use the execute_command tool to take actions (update PO, send Slack, etc.) \
+  when appropriate during or after the conversation.
+- Customer-facing actions require human approval — mention the dashboard.
+- If the supplier gives a significantly different ETA, note it for the summary.
+- When you have gathered the information you need, wrap up the call politely.
+
+Tone: Brief, direct, conversational. Speak naturally for a phone call — \
+short sentences, no markdown or bullet points. Be warm but efficient.\
+"""
+
+OUTBOUND_ABSENCE_PROMPT = """\
+You are a Supply Chain Coordinator AI worker for HappyRobot. You have placed \
+an outbound call to a contractor about an urgent staffing need. You initiated \
+this call — lead the conversation.
+
+## Incident Details
+- Absent Worker: {worker_name}
+- Site: {site_id}
+- Role: {role}
+- Shift Date: {shift_date}
+- Reason: {reason}
+
+## Your Objectives
+1. Introduce yourself and explain the staffing gap.
+2. Confirm the contractor's availability for the date and role.
+3. Provide site details and any special instructions.
+4. Get confirmation or a counter-proposal.
+5. Summarize the agreement and next steps.
+
+## Rules
+- You already know the incident details above — do NOT ask the contractor to \
+  explain the situation to you.
+- Use the execute_command tool to take actions when appropriate.
+- If the contractor cannot cover, note it so the system can try alternatives.
+- When you have a clear answer, wrap up the call politely.
+
+Tone: Brief, direct, conversational. Speak naturally for a phone call — \
+short sentences, no markdown or bullet points. Be warm but efficient.\
+"""
+
 LIVE_TOOL_DECLARATIONS: list[dict[str, Any]] = [
     {
         "function_declarations": [
@@ -264,13 +326,20 @@ class VoicePipeline:
         logger.info("Voice pipeline ended (call_sid=%s)", self.call_sid)
 
     async def _run_session(self, settings, *, is_reconnect: bool = False) -> None:
+        # Start receiving Twilio messages in background immediately.
+        if not is_reconnect:
+            self._twilio_recv_task = asyncio.create_task(self._receive_from_twilio())
+
+        # Connect to Gemini immediately with a generic system prompt — don't
+        # wait for the Twilio start event.  Incident-specific context will be
+        # injected via the opening prompt (which waits for _stream_ready).
         client = genai.Client(api_key=settings.vertex_ai_key)
 
         config = cast(
             types.LiveConnectConfigOrDict,
             {
                 "response_modalities": ["AUDIO"],
-                "system_instruction": self._build_system_instruction(),
+                "system_instruction": VOICE_SYSTEM_PROMPT,
                 "tools": LIVE_TOOL_DECLARATIONS,
                 "speech_config": {
                     "voice_config": {
@@ -309,13 +378,17 @@ class VoicePipeline:
             )
 
             tasks = [
-                self._receive_from_twilio(),
                 self._send_queued_audio_to_gemini(session),
                 self._receive_from_gemini(session),
                 self._send_queued_audio_to_twilio(),
                 self._session_timeout_watchdog(settings.voice_session_timeout_s),
             ]
-            if not is_reconnect:
+            if is_reconnect:
+                # On reconnect, we need a fresh Twilio receiver
+                tasks.append(self._receive_from_twilio())
+            else:
+                # First run: _receive_from_twilio is already running as self._twilio_recv_task
+                tasks.append(self._twilio_recv_task)
                 tasks.append(self._send_opening_prompt(session))
 
             await asyncio.gather(*tasks)
@@ -349,10 +422,65 @@ class VoicePipeline:
         logger.info("\n".join(lines))
 
     def _build_system_instruction(self) -> str:
+        incident_context = self._load_incident_context()
+        if incident_context:
+            print(f"\n>>> USING INCIDENT-AWARE PROMPT (incident={self.incident_id})\n", flush=True)
+            return incident_context
+        print(f"\n>>> USING GENERIC PROMPT (incident_id={self.incident_id!r})\n", flush=True)
         parts = [VOICE_SYSTEM_PROMPT]
         if self.incident_id:
             parts.append(f"\n\nActive incident ID: {self.incident_id}")
         return "\n".join(parts)
+
+    def _load_incident_context(self) -> str | None:
+        """Load incident from DB and build a context-aware system prompt for outbound calls."""
+        if not self.incident_id:
+            return None
+
+        import uuid as _uuid
+
+        from app.database import SessionLocal
+        from app.models import Incident, IncidentType
+
+        db = SessionLocal()
+        try:
+            try:
+                incident_uuid = _uuid.UUID(str(self.incident_id))
+            except ValueError:
+                logger.warning("Invalid incident_id format: %s", self.incident_id)
+                return None
+
+            incident = db.query(Incident).filter(
+                Incident.id == incident_uuid
+            ).first()
+            if not incident:
+                logger.warning("Incident not found for voice context: %s", self.incident_id)
+                return None
+
+            payload = incident.payload or {}
+
+            if incident.type == IncidentType.shipment_delay:
+                prompt = OUTBOUND_DELAY_PROMPT.format(
+                    po_number=payload.get("po_number", "N/A"),
+                    delay_reason=payload.get("delay_reason", "Unknown"),
+                    new_eta=payload.get("new_eta", "TBD"),
+                    severity=incident.severity.value,
+                )
+            elif incident.type == IncidentType.worker_absence:
+                prompt = OUTBOUND_ABSENCE_PROMPT.format(
+                    worker_name=payload.get("worker_name", "Unknown"),
+                    site_id=payload.get("site_id", "N/A"),
+                    role=payload.get("role", "general"),
+                    shift_date=payload.get("shift_date", "TBD"),
+                    reason=payload.get("reason", "Not specified"),
+                )
+            else:
+                return None
+
+            prompt += f"\n\nActive incident ID: {self.incident_id}"
+            return prompt
+        finally:
+            db.close()
 
     def _record_latency(self, stage: str, duration_ms: float) -> None:
         window = self._stage_latency.get(stage)
@@ -364,16 +492,51 @@ class VoicePipeline:
     # ── Opening prompt ────────────────────────────────────────────────────
 
     async def _send_opening_prompt(self, session: Any) -> None:
-        """Wait for Twilio stream to be ready, then prompt Gemini to speak first."""
+        """Wait for Twilio stream to be ready, then prompt Gemini to speak first.
+
+        Incident context is injected here (not in the system instruction) so
+        that the Gemini session can be opened immediately without waiting for
+        Twilio's customParameters.
+        """
         while not self._stopped and not self._stream_ready.is_set():
             await asyncio.sleep(0.05)
         if self._stopped:
             return
 
-        # Small delay to ensure audio pipe is fully established
+        # Flush stale audio that accumulated before Gemini was ready
+        dropped = 0
+        while not self._audio_queue.empty():
+            try:
+                self._audio_queue.get_nowait()
+                dropped += 1
+            except asyncio.QueueEmpty:
+                break
+        if dropped:
+            logger.info("Flushed %d stale audio chunks after stream ready", dropped)
+
         await asyncio.sleep(self._opening_prompt_delay_s)
 
-        if self.greeting:
+        if self.incident_id:
+            incident_context = self._load_incident_context()
+            if incident_context:
+                print(f"\n>>> USING INCIDENT-AWARE PROMPT (incident={self.incident_id})\n", flush=True)
+                prompt = (
+                    f"[System: Here is your mission context for this outbound call.\n\n"
+                    f"{incident_context}\n\n"
+                    f"You placed this outbound call. Introduce yourself, state why you are "
+                    f"calling (reference the PO number or staffing gap), and begin working "
+                    f"through your objectives. Do NOT ask 'how can I help' — you initiated "
+                    f"this call.]"
+                )
+            else:
+                print(f"\n>>> USING GENERIC PROMPT (incident_id={self.incident_id!r})\n", flush=True)
+                prompt = (
+                    "[System: You placed this outbound call about an incident. "
+                    f"Active incident ID: {self.incident_id}. "
+                    "Introduce yourself, state why you are calling, and begin working "
+                    "through your objectives. Do NOT ask 'how can I help' — you initiated this call.]"
+                )
+        elif self.greeting:
             prompt = f"[System: Greet the caller. Context: {self.greeting}]"
         else:
             prompt = (
@@ -409,15 +572,23 @@ class VoicePipeline:
                 event = msg.get("event")
 
                 if event == "start":
-                    stream_sid = msg["start"]["streamSid"]
+                    start_data = msg["start"]
+                    stream_sid = start_data["streamSid"]
                     self.stream_sid = stream_sid
                     # Capture real Twilio call SID if available
-                    twilio_call_sid = msg["start"].get("callSid")
+                    twilio_call_sid = start_data.get("callSid")
                     if twilio_call_sid:
                         self.call_sid = twilio_call_sid
+                    # Read customParameters sent via <Parameter> elements
+                    custom = start_data.get("customParameters", {})
+                    if custom.get("incident_id") and not self.incident_id:
+                        self.incident_id = custom["incident_id"]
+                        print(f"\n>>> GOT incident_id FROM customParameters: {self.incident_id}\n", flush=True)
+                    if custom.get("greeting") and not self.greeting:
+                        self.greeting = custom["greeting"]
                     _active_sessions[stream_sid] = self
                     self._stream_ready.set()
-                    logger.info("Twilio stream started: %s (call_sid=%s)", self.stream_sid, self.call_sid)
+                    logger.info("Twilio stream started: %s (call_sid=%s, incident_id=%s)", self.stream_sid, self.call_sid, self.incident_id)
 
                 elif event == "media":
                     payload_b64 = msg["media"]["payload"]
