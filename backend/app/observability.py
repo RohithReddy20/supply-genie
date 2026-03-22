@@ -25,9 +25,19 @@ action_counter: metrics.Counter | None = None
 action_duration: metrics.Histogram | None = None
 incident_counter: metrics.Counter | None = None
 
+# Resilience metrics
+connector_latency: metrics.Histogram | None = None
+retry_exhaustion_counter: metrics.Counter | None = None
+circuit_breaker_trip_counter: metrics.Counter | None = None
+timeout_counter: metrics.Counter | None = None
+voice_drop_counter: metrics.Counter | None = None
+
 
 def configure_observability(service_name: str) -> None:
-    global _tracer, _meter, action_counter, action_duration, incident_counter
+    global _tracer, _meter
+    global action_counter, action_duration, incident_counter
+    global connector_latency, retry_exhaustion_counter, circuit_breaker_trip_counter
+    global timeout_counter, voice_drop_counter
 
     logging.basicConfig(
         level=logging.INFO,
@@ -49,7 +59,7 @@ def configure_observability(service_name: str) -> None:
     metrics.set_meter_provider(meter_provider)
     _meter = metrics.get_meter(service_name)
 
-    # Instruments
+    # Core instruments
     action_counter = _meter.create_counter(
         "action.executions",
         description="Number of action executions by type and outcome",
@@ -62,6 +72,29 @@ def configure_observability(service_name: str) -> None:
     incident_counter = _meter.create_counter(
         "incident.created",
         description="Number of incidents created by type",
+    )
+
+    # Resilience instruments
+    connector_latency = _meter.create_histogram(
+        "connector.latency_ms",
+        description="Per-connector call latency in milliseconds",
+        unit="ms",
+    )
+    retry_exhaustion_counter = _meter.create_counter(
+        "action.retry_exhausted",
+        description="Number of actions that exhausted all retries (dead-lettered)",
+    )
+    circuit_breaker_trip_counter = _meter.create_counter(
+        "circuit_breaker.trips",
+        description="Number of times a circuit breaker tripped open",
+    )
+    timeout_counter = _meter.create_counter(
+        "connector.timeouts",
+        description="Number of connector timeout events",
+    )
+    voice_drop_counter = _meter.create_counter(
+        "voice.audio_drops",
+        description="Number of audio frames dropped due to backpressure",
     )
 
 
@@ -104,11 +137,35 @@ def trace_action(
                 action_counter.add(1, {"action_type": action_type, "outcome": outcome})
             if action_duration:
                 action_duration.record(duration_ms, {"action_type": action_type, "outcome": outcome})
+            if connector_latency:
+                connector_latency.record(duration_ms, {"connector": action_type})
+
+            # Track exhaustion
+            if not result["success"]:
+                retry_count = (attributes or {}).get("action.retry_count", 0)
+                if isinstance(retry_count, int) and retry_count >= 2:
+                    if retry_exhaustion_counter:
+                        retry_exhaustion_counter.add(1, {"action_type": action_type})
 
 
 def record_incident_created(incident_type: str) -> None:
     if incident_counter:
         incident_counter.add(1, {"incident_type": incident_type})
+
+
+def record_circuit_breaker_trip(connector: str) -> None:
+    if circuit_breaker_trip_counter:
+        circuit_breaker_trip_counter.add(1, {"connector": connector})
+
+
+def record_timeout(connector: str) -> None:
+    if timeout_counter:
+        timeout_counter.add(1, {"connector": connector})
+
+
+def record_voice_drops(direction: str, count: int) -> None:
+    if voice_drop_counter:
+        voice_drop_counter.add(count, {"direction": direction})
 
 
 class CorrelationIdAdapter(logging.LoggerAdapter):

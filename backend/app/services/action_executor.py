@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.models import ActionRun, ActionStatus, ActionType, Incident, POStatus
 from app.observability import trace_action
+from app.resilience import backoff_delay_ms, get_fallback_message
 from app.services.connectors.email import send_email
 from app.services.connectors.labor_system import update_labor_record
 from app.services.connectors.manager_notify import notify_site_manager
@@ -59,6 +61,11 @@ def retry_failed_actions(db: Session, incident: Incident) -> list[ActionRun]:
             continue
         if action.retry_count >= settings.max_retries:
             continue
+
+        # Exponential backoff with jitter before retry
+        delay_ms = backoff_delay_ms(action.retry_count)
+        if delay_ms > 0:
+            time.sleep(delay_ms / 1000.0)
 
         action.retry_count += 1
         action.status = ActionStatus.pending
@@ -327,13 +334,20 @@ def _handle_failure(action: ActionRun) -> None:
 
     if action.retry_count >= settings.max_retries:
         action.status = ActionStatus.failed
+        fallback = get_fallback_message(action.action_type.value)
         logger.warning(
-            "Action %s exhausted retries (%d/%d) — dead-lettered",
-            action.id, action.retry_count, settings.max_retries,
+            "Action %s exhausted retries (%d/%d) — dead-lettered. Fallback: %s",
+            action.id, action.retry_count, settings.max_retries, fallback,
         )
+        # Store fallback in response_payload for UI display
+        if action.response_payload is None:
+            action.response_payload = {}
+        action.response_payload["fallback_message"] = fallback
+        action.response_payload["dead_lettered"] = True
     else:
         action.status = ActionStatus.failed
         logger.info(
-            "Action %s failed (attempt %d/%d)",
+            "Action %s failed (attempt %d/%d), next backoff ~%dms",
             action.id, action.retry_count, settings.max_retries,
+            backoff_delay_ms(action.retry_count),
         )

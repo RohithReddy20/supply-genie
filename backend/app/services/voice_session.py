@@ -230,8 +230,40 @@ class VoicePipeline:
         self._stage_latency: dict[str, _LatencyWindow] = {}
 
     async def run(self) -> None:
-        """Main loop: bridge Twilio WS ↔ Gemini Live API session."""
+        """Main loop: bridge Twilio WS ↔ Gemini Live API session.
+
+        Supports reconnection on Gemini failure and enforces a session-level timeout.
+        """
         settings = get_settings()
+        self._session_started_at = perf_counter()
+        reconnect_attempts = settings.voice_gemini_reconnect_attempts
+        attempt = 0
+
+        while not self._stopped and attempt <= reconnect_attempts:
+            try:
+                await self._run_session(settings, is_reconnect=(attempt > 0))
+                break  # clean exit
+            except Exception:
+                attempt += 1
+                if attempt > reconnect_attempts or self._stopped:
+                    logger.exception(
+                        "Voice pipeline error (call_sid=%s, attempt=%d/%d) — giving up",
+                        self.call_sid, attempt, reconnect_attempts + 1,
+                    )
+                    break
+                logger.warning(
+                    "Gemini session failed (call_sid=%s, attempt=%d/%d) — reconnecting",
+                    self.call_sid, attempt, reconnect_attempts + 1,
+                )
+                await asyncio.sleep(0.5)  # brief pause before reconnect
+
+        self._stopped = True
+        self._export_latency_summary()
+        if self.stream_sid and self.stream_sid in _active_sessions:
+            del _active_sessions[self.stream_sid]
+        logger.info("Voice pipeline ended (call_sid=%s)", self.call_sid)
+
+    async def _run_session(self, settings, *, is_reconnect: bool = False) -> None:
         client = genai.Client(api_key=settings.vertex_ai_key)
 
         config = cast(
@@ -265,31 +297,56 @@ class VoicePipeline:
             },
         )
 
-        try:
-            async with client.aio.live.connect(
-                model=settings.gemini_live_model, config=config
-            ) as session:
-                self._gemini_session = session
-                logger.info(
-                    "Gemini Live session started (call_sid=%s, correlation=%s)",
-                    self.call_sid,
-                    self.correlation_id,
-                )
+        async with client.aio.live.connect(
+            model=settings.gemini_live_model, config=config
+        ) as session:
+            self._gemini_session = session
+            logger.info(
+                "Gemini Live session %s (call_sid=%s, correlation=%s)",
+                "reconnected" if is_reconnect else "started",
+                self.call_sid,
+                self.correlation_id,
+            )
 
-                await asyncio.gather(
-                    self._receive_from_twilio(),
-                    self._send_queued_audio_to_gemini(session),
-                    self._receive_from_gemini(session),
-                    self._send_queued_audio_to_twilio(),
-                    self._send_opening_prompt(session),
+            tasks = [
+                self._receive_from_twilio(),
+                self._send_queued_audio_to_gemini(session),
+                self._receive_from_gemini(session),
+                self._send_queued_audio_to_twilio(),
+                self._session_timeout_watchdog(settings.voice_session_timeout_s),
+            ]
+            if not is_reconnect:
+                tasks.append(self._send_opening_prompt(session))
+
+            await asyncio.gather(*tasks)
+
+    async def _session_timeout_watchdog(self, timeout_s: float) -> None:
+        """Terminate session if it exceeds the configured timeout."""
+        while not self._stopped:
+            elapsed = perf_counter() - self._session_started_at
+            if elapsed >= timeout_s:
+                logger.warning(
+                    "Voice session timed out after %.0fs (call_sid=%s)",
+                    elapsed, self.call_sid,
                 )
-        except Exception:
-            logger.exception("Voice pipeline error (call_sid=%s)", self.call_sid)
-        finally:
-            self._stopped = True
-            if self.stream_sid and self.stream_sid in _active_sessions:
-                del _active_sessions[self.stream_sid]
-            logger.info("Voice pipeline ended (call_sid=%s)", self.call_sid)
+                self._stopped = True
+                return
+            await asyncio.sleep(5.0)
+
+    def _export_latency_summary(self) -> None:
+        """Log final latency stats for the session (useful for post-call diagnostics)."""
+        if not self._stage_latency:
+            return
+        lines = [f"Voice session latency summary (call_sid={self.call_sid}):"]
+        for stage, window in sorted(self._stage_latency.items()):
+            avg, p95, mx, count = window.summary()
+            if count > 0:
+                lines.append(f"  {stage}: avg={avg:.1f}ms p95={p95:.1f}ms max={mx:.1f}ms n={count}")
+        if self._dropped_inbound_audio > 0:
+            lines.append(f"  inbound_audio_drops: {self._dropped_inbound_audio}")
+        if self._dropped_outbound_audio > 0:
+            lines.append(f"  outbound_audio_drops: {self._dropped_outbound_audio}")
+        logger.info("\n".join(lines))
 
     def _build_system_instruction(self) -> str:
         parts = [VOICE_SYSTEM_PROMPT]

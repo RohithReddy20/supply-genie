@@ -101,8 +101,34 @@ class Settings:
     )
     voice_thinking_budget: int = _env_int("VOICE_THINKING_BUDGET", 0)
 
-    # Retry
+    # Retry & backoff
     max_retries: int = _env_int("MAX_RETRIES", 3, min_value=1)
+    backoff_base_ms: int = _env_int("BACKOFF_BASE_MS", 200, min_value=50)
+    backoff_max_ms: int = _env_int("BACKOFF_MAX_MS", 10000, min_value=1000)
+
+    # Per-connector timeouts (seconds)
+    timeout_slack_s: float = _env_float("TIMEOUT_SLACK_S", 10.0, min_value=1.0)
+    timeout_twilio_s: float = _env_float("TIMEOUT_TWILIO_S", 15.0, min_value=1.0)
+    timeout_email_s: float = _env_float("TIMEOUT_EMAIL_S", 10.0, min_value=1.0)
+    timeout_po_s: float = _env_float("TIMEOUT_PO_S", 5.0, min_value=1.0)
+    timeout_labor_s: float = _env_float("TIMEOUT_LABOR_S", 5.0, min_value=1.0)
+
+    # Circuit breaker
+    cb_failure_threshold: int = _env_int("CB_FAILURE_THRESHOLD", 5, min_value=2)
+    cb_recovery_timeout_s: float = _env_float("CB_RECOVERY_TIMEOUT_S", 60.0, min_value=10.0)
+
+    # Request timeout middleware
+    request_timeout_s: float = _env_float("REQUEST_TIMEOUT_S", 90.0, min_value=10.0)
+
+    # Database pool
+    db_pool_size: int = _env_int("DB_POOL_SIZE", 10, min_value=2)
+    db_max_overflow: int = _env_int("DB_MAX_OVERFLOW", 20, min_value=0)
+    db_pool_timeout_s: int = _env_int("DB_POOL_TIMEOUT_S", 30, min_value=5)
+    db_pool_pre_ping: bool = _env_bool("DB_POOL_PRE_PING", True)
+
+    # Voice pipeline resilience
+    voice_session_timeout_s: float = _env_float("VOICE_SESSION_TIMEOUT_S", 300.0, min_value=30.0)
+    voice_gemini_reconnect_attempts: int = _env_int("VOICE_GEMINI_RECONNECT_ATTEMPTS", 2, min_value=0)
 
 
 def get_settings() -> Settings:
