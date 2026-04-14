@@ -6,9 +6,9 @@ Status legend:
 - [x] Done
 
 ## Phase 0 - Baseline and safety rails
-- [ ] Add voice/action structured metrics (latency, error rate, completion rate).
-- [ ] Add failure-drill checklist (pod kill, connector timeout, DB lock contention).
-- [ ] Define SLO thresholds and alert conditions.
+- [x] Add voice/action structured metrics (latency, error rate, completion rate).
+- [x] Add failure-drill checklist (pod kill, connector timeout, DB lock contention).
+- [x] Define SLO thresholds and alert conditions.
 
 ## Phase 1 - Voice routing stability and ownership
 - [x] Add sticky-routing deployment templates for Twilio media-stream traffic at ingress/service layer.
@@ -51,3 +51,4 @@ Status legend:
 - Queue status now exposes worker runtime health fields (running/cycle/error/processed count) for safer queued-mode rollout.
 - Phase 4 command routing is implemented with strict rejection when remote owner evidence is missing.
 - Phase 4 stale-owner detection is enforced to prevent ambiguous command delivery.
+- Phase 0 baseline work is documented in operations runbooks and instrumented with queue/voice-command events.

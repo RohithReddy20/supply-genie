@@ -15,6 +15,7 @@ from twilio.twiml.voice_response import Connect, VoiceResponse
 from app.config import get_settings
 from app.database import get_db
 from app.models import TranscriptEvent, VoiceSession
+from app.observability import record_voice_command_event
 from app.schemas import OutboundCallRequest, TranscriptEventOut, VoiceSessionOut
 from app.services.voice_command_bus import get_voice_command_bus
 from app.services.voice_pipeline import VoicePipelineSession, get_active_session_metadata, get_active_sessions
@@ -336,6 +337,7 @@ async def send_voice_command(
     """Send a control command to an active call on this pod or the owner pod."""
     command = (body.command or "").strip().lower()
     if command != "end_call":
+        record_voice_command_event("rejected_unsupported", "validation")
         raise HTTPException(status_code=422, detail="Unsupported command. Allowed: end_call")
 
     local_session = get_active_sessions().get(call_sid)
@@ -343,9 +345,13 @@ async def send_voice_command(
         try:
             result = await local_session.dispatch_control_command(command, body.payload)
         except ValueError as exc:
+            record_voice_command_event("rejected_invalid", "local")
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:
+            record_voice_command_event("rejected_not_ready", "local")
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        record_voice_command_event("accepted", "local")
 
         return VoiceControlCommandOut(
             call_sid=call_sid,
@@ -356,6 +362,7 @@ async def send_voice_command(
 
     bus = get_voice_command_bus()
     if not bus.enabled:
+        record_voice_command_event("rejected_bus_disabled", "remote")
         raise HTTPException(
             status_code=503,
             detail="Voice command bus is disabled; cannot route command to non-local owner",
@@ -363,18 +370,21 @@ async def send_voice_command(
 
     checkpoint = await get_voice_state_store().get(call_sid)
     if not checkpoint:
+        record_voice_command_event("rejected_checkpoint_missing", "remote")
         raise HTTPException(
             status_code=404,
             detail="Active call not found locally and no active checkpoint exists for remote routing",
         )
 
     if _checkpoint_is_stale(checkpoint):
+        record_voice_command_event("rejected_stale_owner", "remote")
         raise HTTPException(
             status_code=409,
             detail="Owner checkpoint is stale; command rejected by fail-closed stale-owner policy",
         )
 
     await bus.publish(call_sid, command, body.payload)
+    record_voice_command_event("accepted", "command_bus")
     return VoiceControlCommandOut(
         call_sid=call_sid,
         accepted=True,

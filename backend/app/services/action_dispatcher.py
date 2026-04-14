@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.database import SessionLocal
 from app.models import ActionRun, ActionStatus, Incident
+from app.observability import record_action_queue_event
 from app.services.action_executor import execute_pending_actions
 
 logger = logging.getLogger("backend.action_dispatcher")
@@ -38,6 +39,8 @@ def dispatch_incident_actions(db, incident: Incident) -> int:
         return enqueue_pending_actions(db, incident.id)
 
     executed = execute_pending_actions(db, incident)
+    if executed:
+        record_action_queue_event("executed_inline", "inline")
     return len(executed)
 
 
@@ -52,6 +55,8 @@ def enqueue_pending_actions(db, incident_id: UUID) -> int:
         .values(status=ActionStatus.queued)
     ).rowcount
     db.commit()
+    if rows:
+        record_action_queue_event("enqueued", "queued")
     return cast(int, rows or 0)
 
 
@@ -115,10 +120,12 @@ def requeue_failed_action(db: Session, action: ActionRun) -> str:
     db.commit()
 
     if _is_queued_mode():
+        record_action_queue_event("manual_requeue", "queued")
         return "queued"
 
     incident = action.incident
     execute_pending_actions(db, incident)
+    record_action_queue_event("manual_requeue", "inline")
     return "inline"
 
 
@@ -158,6 +165,7 @@ async def _worker_loop() -> None:
             processed = _process_next_queued_incident()
             if processed:
                 _worker_state["processed_total"] = int(_worker_state.get("processed_total", 0) or 0) + 1
+                record_action_queue_event("processed", "queued")
             if not processed:
                 await asyncio.sleep(poll_interval_s)
         except asyncio.CancelledError:
@@ -241,6 +249,7 @@ def _requeue_due_failed_actions() -> int:
         if requeued:
             db.commit()
             logger.info("Requeued %d failed action(s) after backoff", requeued)
+            record_action_queue_event("auto_requeue", "queued")
         else:
             db.rollback()
 

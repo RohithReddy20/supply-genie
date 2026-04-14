@@ -85,3 +85,9 @@
 - Enforced stale-owner rejection in backend/app/routers/voice.py for remote command routing when checkpoint recency is outside threshold.
 - Added regression coverage for stale checkpoint rejection in backend/tests/test_voice_commands.py.
 - Validation: combined suites (voice commands + workflow + regression) passed (48 total).
+
+## 2026-04-14 (phase-0 baseline completion)
+- Added structured observability events for queue lifecycle and voice command routing in backend/app/observability.py and wired emissions in action dispatcher and voice router paths.
+- Added failure drill checklist runbook in docs/operations/failure-drill-checklist.md.
+- Added SLO and alert baseline runbook in docs/operations/slo-and-alert-baseline.md.
+- Validation: compile checks passed and combined suites (voice commands + workflow + regression) passed (48 total).
