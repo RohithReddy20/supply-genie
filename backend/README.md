@@ -40,12 +40,8 @@ uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - `ACTION_WORKER_POLL_INTERVAL_S` (default `1.0`)
 
 ### Idempotency Notes
-- Action executions carry deterministic idempotency keys (`action:{action_id}`).
-- Email connector enforces provider-side idempotency by forwarding this key to Resend.
+- Timeout on non-idempotent connectors (Slack/Twilio/manager notify paths) uses fail-closed dead-letter behavior to avoid duplicate side effects.
 
-### Voice Command Routing Notes
-- If the call is active on the local pod, the command executes immediately.
-- If not local, command routing requires Redis and an active call checkpoint; otherwise command is rejected.
 - If the remote owner checkpoint is stale, commands are rejected with fail-closed semantics.
 
 ### Probe Scripts

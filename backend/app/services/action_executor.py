@@ -20,6 +20,13 @@ from app.services.connectors.twilio_voice import make_call
 
 logger = logging.getLogger("backend.action_executor")
 
+_NON_IDEMPOTENT_TIMEOUT_ACTIONS = {
+    ActionType.slack_notify,
+    ActionType.call_production,
+    ActionType.call_contractor,
+    ActionType.notify_manager,
+}
+
 
 def _action_idempotency_key(action: ActionRun) -> str:
     """Stable idempotency key for a logical action across retries."""
@@ -421,6 +428,30 @@ def _execute_notify_manager(action: ActionRun, payload: dict) -> bool:
 
 def _handle_failure(action: ActionRun) -> None:
     settings = get_settings()
+
+    error_text = (action.error_message or "").lower()
+    uncertain_timeout = (
+        "timeout" in error_text and action.action_type in _NON_IDEMPOTENT_TIMEOUT_ACTIONS
+    )
+
+    if uncertain_timeout:
+        action.retry_count = settings.max_retries
+        action.status = ActionStatus.failed
+        if action.response_payload is None:
+            action.response_payload = {}
+        action.response_payload["dead_lettered"] = True
+        action.response_payload["uncertain_outcome"] = True
+        action.response_payload["fallback_message"] = (
+            "Timeout on non-idempotent connector; auto-retry disabled to prevent duplicate side effects. "
+            "Manual operator review required."
+        )
+        logger.warning(
+            "Action %s timed out on non-idempotent connector %s; fail-closed dead-letter applied",
+            action.id,
+            action.action_type.value,
+        )
+        return
+
     action.retry_count += 1
 
     if action.retry_count >= settings.max_retries:

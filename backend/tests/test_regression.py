@@ -393,6 +393,37 @@ class TestRetryBehavior:
         assert "worker_last_cycle_at" in data
         assert "worker_processed_total" in data
 
+    @patch("app.services.action_executor.make_call")
+    def test_non_idempotent_timeout_dead_letters_immediately(self, mock_call, db):
+        mock_call.return_value = CallResult(ok=False, to="+1555", error="Timeout after 15.0s")
+        inc = _delay_incident(db, key="reg-timeout-fail-closed-001")
+        action = _add_action(db, inc, seq=1, atype=ActionType.call_production)
+        db.commit()
+        db.refresh(inc)
+
+        execute_pending_actions(db, inc)
+        db.refresh(action)
+
+        assert action.status == ActionStatus.failed
+        assert action.retry_count == 3  # max_retries default
+        assert (action.response_payload or {}).get("dead_lettered") is True
+        assert (action.response_payload or {}).get("uncertain_outcome") is True
+
+    @patch("app.services.action_executor.send_email")
+    def test_idempotent_timeout_still_retriable(self, mock_email, db, shipment):
+        mock_email.return_value = EmailResult(ok=False, to="buyer@example.com", error="Timeout after 10.0s")
+        inc = _delay_incident(db, key="reg-email-timeout-retriable-001", shipment_id=shipment.id)
+        action = _add_action(db, inc, seq=1, atype=ActionType.email_customer)
+        db.commit()
+        db.refresh(inc)
+
+        execute_pending_actions(db, inc)
+        db.refresh(action)
+
+        assert action.status == ActionStatus.failed
+        assert action.retry_count == 1
+        assert (action.response_payload or {}).get("uncertain_outcome") is None
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 3. Approval Gate Scenarios (5 tests)
