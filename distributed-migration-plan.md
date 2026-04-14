@@ -37,7 +37,7 @@ Status legend:
 - [x] Add stale-owner detection and fail-closed policy (reject stale owner checkpoint routes).
 
 ## Phase 5 - Optional workflow orchestration
-- [ ] Evaluate Temporal/Durable-style workflows against current queue model.
+- [x] Evaluate Temporal/Durable-style workflows against current queue model.
 - [ ] Migrate one high-value long-running workflow first.
 - [ ] Keep short/simple workflows on lightweight queue path.
 
@@ -52,3 +52,4 @@ Status legend:
 - Phase 4 command routing is implemented with strict rejection when remote owner evidence is missing.
 - Phase 4 stale-owner detection is enforced to prevent ambiguous command delivery.
 - Phase 0 baseline work is documented in operations runbooks and instrumented with queue/voice-command events.
+- Phase 5 evaluation is documented in docs/operations/workflow-orchestration-evaluation.md with explicit adoption gates.
