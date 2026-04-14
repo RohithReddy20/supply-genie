@@ -52,3 +52,12 @@
 - Added explicit contractor contact fields in absence ingestion schema/service route wiring (backend/app/schemas.py, backend/app/routers/incidents.py, backend/app/services/incidents.py) so valid API payloads can drive real call execution without synthetic fallbacks.
 - Updated regression/workflow fixtures to provide explicit call destinations where success is expected (backend/tests/test_regression.py, backend/tests/test_workflow_b.py).
 - Validation: strict-mode suites tests/test_workflow_b.py and tests/test_regression.py pass (40 passed).
+
+## 2026-04-14 (phase-3 ops hardening)
+- Added queue/dead-letter operational helpers in backend/app/services/action_dispatcher.py (queue status and manual failed-action requeue).
+- Added new API endpoints in backend/app/routers/incidents.py:
+	- GET /api/v1/incidents/queue/status
+	- GET /api/v1/incidents/actions/dead-letter
+	- POST /api/v1/incidents/actions/{action_id}/requeue
+- Added regression coverage for dead-letter listing, queue status, and manual requeue flows in backend/tests/test_regression.py.
+- Validation: targeted new tests passed and broader suites passed (tests/test_workflow_b.py + tests/test_regression.py).

@@ -28,7 +28,7 @@ Status legend:
 ## Phase 3 - Async action execution
 - [x] Add job queue abstraction for connector actions.
 - [~] Move execute_pending_actions out of request thread into workers (enabled via ACTION_EXECUTION_MODE=queued rollout flag).
-- [~] Add retry with backoff and dead-letter handling (worker auto-requeue after backoff in queued mode; full validation pending).
+- [x] Add retry with backoff and dead-letter handling (worker auto-requeue plus dead-letter visibility and manual requeue endpoints).
 - [~] Add per-action idempotency guard for external side effects (deterministic idempotency-key propagation added; provider-side enforcement tuning pending).
 
 ## Phase 4 - Cross-pod active-call control plane
@@ -47,3 +47,4 @@ Status legend:
 - Remaining Phase 1 work is environment rollout and multi-pod validation execution.
 - Phase 2 checkpoint write/read paths are in place.
 - Phase 3 dispatcher + background worker scaffolding is in place behind a rollout flag.
+- Phase 3 includes operational queue/dead-letter control endpoints for safe rollout.

@@ -21,6 +21,9 @@ uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - `POST /api/v1/connectors/slack/notify`
 - `GET /api/v1/voice/active-sessions`
 - `GET /api/v1/voice/checkpoints/{call_sid}`
+- `GET /api/v1/incidents/queue/status`
+- `GET /api/v1/incidents/actions/dead-letter`
+- `POST /api/v1/incidents/actions/{action_id}/requeue`
 
 This is setup-only code. No real external side effects are executed yet.
 

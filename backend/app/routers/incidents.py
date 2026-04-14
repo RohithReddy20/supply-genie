@@ -3,11 +3,12 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import get_db
-from app.models import IncidentStatus, IncidentType
+from app.models import ActionRun, IncidentStatus, IncidentType
 from app.models import ActionStatus as ActionStatusEnum
 from app.schemas import (
     AbsenceEventIn,
@@ -18,6 +19,7 @@ from app.schemas import (
     IncidentListOut,
     IncidentOut,
 )
+from app.services.action_dispatcher import get_queue_status, requeue_failed_action
 from app.services.action_executor import retry_failed_actions
 from app.services.incidents import (
     get_incident,
@@ -153,4 +155,70 @@ def retry_incident_actions(
         "incident_id": str(incident_id),
         "retried_actions": [str(a.id) for a in retried],
         "count": len(retried),
+    }
+
+
+@router.get("/queue/status")
+def action_queue_status(db: Session = Depends(get_db)) -> dict:
+    """Queue and dead-letter counts for async action execution rollout."""
+    return get_queue_status(db)
+
+
+@router.get("/actions/dead-letter")
+def list_dead_letter_actions(
+    limit: int = 20,
+    db: Session = Depends(get_db),
+) -> dict:
+    settings = get_settings()
+    capped_limit = min(max(limit, 1), 100)
+
+    rows = (
+        db.query(ActionRun)
+        .filter(
+            ActionRun.status == ActionStatusEnum.failed,
+            ActionRun.retry_count >= settings.max_retries,
+        )
+        .order_by(desc(ActionRun.created_at))
+        .limit(capped_limit)
+        .all()
+    )
+
+    return {
+        "items": [
+            {
+                "action_id": str(action.id),
+                "incident_id": str(action.incident_id),
+                "action_type": action.action_type.value,
+                "status": action.status.value,
+                "retry_count": action.retry_count,
+                "error_message": action.error_message,
+                "dead_lettered": bool((action.response_payload or {}).get("dead_lettered", False)),
+                "created_at": action.created_at.isoformat() if action.created_at else None,
+            }
+            for action in rows
+        ],
+        "count": len(rows),
+    }
+
+
+@router.post("/actions/{action_id}/requeue")
+def requeue_failed_action_endpoint(
+    action_id: UUID,
+    db: Session = Depends(get_db),
+) -> dict:
+    action = db.get(ActionRun, action_id)
+    if not action:
+        raise HTTPException(status_code=404, detail="Action not found")
+    if action.status != ActionStatusEnum.failed:
+        raise HTTPException(status_code=409, detail="Only failed actions can be requeued")
+
+    mode = requeue_failed_action(db, action)
+    db.refresh(action)
+
+    return {
+        "action_id": str(action.id),
+        "incident_id": str(action.incident_id),
+        "dispatch_mode": mode,
+        "next_status": action.status.value,
+        "retry_count": action.retry_count,
     }

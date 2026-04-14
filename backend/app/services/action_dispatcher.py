@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 from typing import cast
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
+from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import SessionLocal
@@ -46,6 +47,68 @@ def enqueue_pending_actions(db, incident_id: UUID) -> int:
     ).rowcount
     db.commit()
     return cast(int, rows or 0)
+
+
+def get_queue_status(db: Session) -> dict[str, int | str]:
+    """Return queue/dead-letter status counts for operational visibility."""
+    settings = get_settings()
+    queued = db.scalar(
+        select(func.count(ActionRun.id)).where(ActionRun.status == ActionStatus.queued)
+    )
+    in_progress = db.scalar(
+        select(func.count(ActionRun.id)).where(ActionRun.status == ActionStatus.in_progress)
+    )
+    retriable_failed = db.scalar(
+        select(func.count(ActionRun.id))
+        .where(
+            ActionRun.status == ActionStatus.failed,
+            ActionRun.retry_count < settings.max_retries,
+        )
+    )
+    dead_lettered = db.scalar(
+        select(func.count(ActionRun.id))
+        .where(
+            ActionRun.status == ActionStatus.failed,
+            ActionRun.retry_count >= settings.max_retries,
+        )
+    )
+
+    return {
+        "mode": "queued" if _is_queued_mode() else "inline",
+        "queued": int(queued or 0),
+        "in_progress": int(in_progress or 0),
+        "retriable_failed": int(retriable_failed or 0),
+        "dead_lettered": int(dead_lettered or 0),
+    }
+
+
+def requeue_failed_action(db: Session, action: ActionRun) -> str:
+    """Reset a failed action and re-dispatch according to current mode.
+
+    Returns resulting dispatch mode: "queued" or "inline".
+    """
+    if action.status != ActionStatus.failed:
+        raise ValueError("Only failed actions can be requeued")
+
+    action.status = ActionStatus.queued if _is_queued_mode() else ActionStatus.pending
+    action.retry_count = 0
+    action.error_message = None
+
+    payload = action.response_payload or {}
+    payload.pop("dead_lettered", None)
+    payload.pop("fallback_message", None)
+    payload.pop("next_retry_at", None)
+    payload.pop("next_retry_in_ms", None)
+    action.response_payload = payload
+
+    db.commit()
+
+    if _is_queued_mode():
+        return "queued"
+
+    incident = action.incident
+    execute_pending_actions(db, incident)
+    return "inline"
 
 
 async def start_action_worker() -> None:
