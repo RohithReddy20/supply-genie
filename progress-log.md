@@ -72,3 +72,10 @@
 - Enabled real provider-side idempotency enforcement for email by passing idempotency_key to Resend send options in backend/app/services/connectors/email.py.
 - Added focused unit coverage for email idempotency option behavior in backend/tests/test_resilience.py (with and without key).
 - Validation: compile checks passed and combined suites (resilience idempotency + workflow + regression) passed (45 total).
+
+## 2026-04-14 (phase-4 command bus routing)
+- Added Redis-backed per-call voice command bus in backend/app/services/voice_command_bus.py.
+- Wired active session command polling/dispatch into backend/app/services/voice_pipeline.py with strict command handling (currently end_call).
+- Added command endpoint POST /api/v1/voice/commands/{call_sid} in backend/app/routers/voice.py with strict remote routing validation (requires active checkpoint evidence for non-local calls).
+- Added regression coverage for local command dispatch, remote command bus routing, unsupported command rejection, and missing-checkpoint rejection in backend/tests/test_voice_commands.py.
+- Validation: compile checks passed and combined suites (voice commands + workflow + regression) passed (47 total).

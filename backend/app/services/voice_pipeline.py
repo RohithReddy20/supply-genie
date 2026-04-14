@@ -50,6 +50,7 @@ from pipecat.transports.websocket.fastapi import (
 from starlette.websockets import WebSocket
 
 from app.config import get_settings
+from app.services.voice_command_bus import get_voice_command_bus
 from app.services.voice_prompts import build_system_instruction
 from app.services.voice_state_store import get_voice_state_store
 from app.services.voice_tools import TOOL_DECLARATIONS, execute_tool
@@ -319,6 +320,7 @@ class VoicePipelineSession:
         self.correlation_id = str(uuid4())
         self._lifecycle: CallLifecycleManager | None = None
         self._heartbeat_task: asyncio.Task | None = None
+        self._command_bus = get_voice_command_bus()
         self._state_store = get_voice_state_store()
         self._last_clear_ts = 0.0
 
@@ -643,9 +645,11 @@ class VoicePipelineSession:
         settings = get_settings()
         heartbeat_every_s = max(settings.voice_session_heartbeat_s, 1.0)
         checkpoint_every_s = max(settings.voice_state_checkpoint_interval_s, 1.0)
-        loop_every_s = min(heartbeat_every_s, checkpoint_every_s)
+        command_poll_every_s = max(settings.voice_command_poll_interval_s, 0.1)
+        loop_every_s = min(heartbeat_every_s, checkpoint_every_s, command_poll_every_s)
         last_heartbeat = monotonic()
         last_checkpoint = monotonic()
+        last_command_poll = monotonic()
 
         while True:
             await asyncio.sleep(loop_every_s)
@@ -658,6 +662,49 @@ class VoicePipelineSession:
             if now - last_checkpoint >= checkpoint_every_s:
                 await self._checkpoint_state(reason="periodic")
                 last_checkpoint = now
+
+            if now - last_command_poll >= command_poll_every_s:
+                await self._poll_control_commands()
+                last_command_poll = now
+
+    async def dispatch_control_command(
+        self,
+        command: str,
+        payload: dict[str, Any] | None = None,
+    ) -> str:
+        """Execute a control command on the active call session."""
+        lifecycle = self._lifecycle
+        if not lifecycle:
+            raise RuntimeError("Session lifecycle not initialized")
+
+        if command == "end_call":
+            reason = (payload or {}).get("reason", "external_command")
+            lifecycle.append_transcript(
+                "system",
+                f"External command: end_call(reason={reason})",
+            )
+            await self._checkpoint_state(reason="external_command_end_call")
+            await lifecycle.begin_graceful_close()
+            return "graceful_close_started"
+
+        raise ValueError(f"Unsupported control command: {command}")
+
+    async def _poll_control_commands(self) -> None:
+        """Consume and execute queued control commands for this call."""
+        if not self._command_bus.enabled:
+            return
+
+        command = await self._command_bus.pop(self.call_sid)
+        if not command:
+            return
+
+        command_name = str(command.get("command", "")).strip()
+        payload = command.get("payload")
+        try:
+            await self.dispatch_control_command(command_name, payload if isinstance(payload, dict) else {})
+            logger.info("Processed remote voice command %s (call_sid=%s)", command_name, self.call_sid)
+        except Exception:
+            logger.exception("Failed processing remote voice command %s (call_sid=%s)", command_name, self.call_sid)
 
     def _build_state_snapshot(self, reason: str) -> dict[str, Any] | None:
         """Build an active-call snapshot to persist in Redis."""
@@ -672,6 +719,7 @@ class VoicePipelineSession:
             "stream_sid": self.stream_sid,
             "incident_id": self.incident_id,
             "correlation_id": self.correlation_id,
+            "pod_id": settings.pod_id,
             "progress": dict(lifecycle._progress),
             "ready_to_close": lifecycle._ready_to_close,
             "closing": lifecycle._closing,

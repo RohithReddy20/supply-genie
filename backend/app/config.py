@@ -130,6 +130,12 @@ class Settings:
     voice_state_transcript_max_entries: int = _env_int(
         "VOICE_STATE_TRANSCRIPT_MAX_ENTRIES", 200, min_value=20
     )
+    voice_command_poll_interval_s: float = _env_float(
+        "VOICE_COMMAND_POLL_INTERVAL_S", 1.0, min_value=0.1
+    )
+    voice_command_queue_ttl_s: int = _env_int(
+        "VOICE_COMMAND_QUEUE_TTL_S", 1800, min_value=30
+    )
     voice_state_redis_url: str = os.getenv("VOICE_STATE_REDIS_URL", "")
     pod_id: str = os.getenv("POD_ID") or os.getenv("HOSTNAME", "local-dev")
 

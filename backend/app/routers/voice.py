@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request, WebSocket
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -16,7 +16,8 @@ from app.config import get_settings
 from app.database import get_db
 from app.models import TranscriptEvent, VoiceSession
 from app.schemas import OutboundCallRequest, TranscriptEventOut, VoiceSessionOut
-from app.services.voice_pipeline import VoicePipelineSession, get_active_session_metadata
+from app.services.voice_command_bus import get_voice_command_bus
+from app.services.voice_pipeline import VoicePipelineSession, get_active_session_metadata, get_active_sessions
 from app.services.voice_state_store import get_voice_state_store
 
 logger = logging.getLogger("backend.voice_router")
@@ -48,6 +49,18 @@ class VoiceCheckpointOut(BaseModel):
     transcript_entries: int
     checkpoint_reason: str
     checkpointed_at: datetime
+
+
+class VoiceControlCommandIn(BaseModel):
+    command: str
+    payload: dict | None = None
+
+
+class VoiceControlCommandOut(BaseModel):
+    call_sid: str
+    accepted: bool
+    dispatched_to: str
+    result: str
 
 
 # ── Inbound call webhook ─────────────────────────────────────────────────
@@ -298,3 +311,52 @@ async def get_voice_checkpoint(call_sid: str) -> VoiceCheckpointOut | None:
     if not checkpoint:
         return None
     return VoiceCheckpointOut.model_validate(checkpoint)
+
+
+@router.post("/commands/{call_sid}", response_model=VoiceControlCommandOut)
+async def send_voice_command(
+    call_sid: str,
+    body: VoiceControlCommandIn,
+) -> VoiceControlCommandOut:
+    """Send a control command to an active call on this pod or the owner pod."""
+    command = (body.command or "").strip().lower()
+    if command != "end_call":
+        raise HTTPException(status_code=422, detail="Unsupported command. Allowed: end_call")
+
+    local_session = get_active_sessions().get(call_sid)
+    if local_session:
+        try:
+            result = await local_session.dispatch_control_command(command, body.payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        return VoiceControlCommandOut(
+            call_sid=call_sid,
+            accepted=True,
+            dispatched_to="local",
+            result=result,
+        )
+
+    bus = get_voice_command_bus()
+    if not bus.enabled:
+        raise HTTPException(
+            status_code=503,
+            detail="Voice command bus is disabled; cannot route command to non-local owner",
+        )
+
+    checkpoint = await get_voice_state_store().get(call_sid)
+    if not checkpoint:
+        raise HTTPException(
+            status_code=404,
+            detail="Active call not found locally and no active checkpoint exists for remote routing",
+        )
+
+    await bus.publish(call_sid, command, body.payload)
+    return VoiceControlCommandOut(
+        call_sid=call_sid,
+        accepted=True,
+        dispatched_to="command_bus",
+        result="queued_for_owner",
+    )

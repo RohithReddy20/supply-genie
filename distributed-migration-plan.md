@@ -32,8 +32,8 @@ Status legend:
 - [~] Add per-action idempotency guard for external side effects (deterministic propagation complete; provider-side enforcement enabled for email/Resend and pending for remaining connectors).
 
 ## Phase 4 - Cross-pod active-call control plane
-- [ ] Add owner-pod command dispatch channel (pub/sub or queue).
-- [ ] Route non-owner control requests to owner pod.
+- [x] Add owner-pod command dispatch channel (Redis queue per call_sid).
+- [x] Route non-owner control requests to owner pod via command bus with checkpoint presence validation.
 - [ ] Add stale-owner detection and takeover policy.
 
 ## Phase 5 - Optional workflow orchestration
@@ -49,3 +49,4 @@ Status legend:
 - Phase 3 dispatcher + background worker scaffolding is in place behind a rollout flag.
 - Phase 3 includes operational queue/dead-letter control endpoints for safe rollout.
 - Queue status now exposes worker runtime health fields (running/cycle/error/processed count) for safer queued-mode rollout.
+- Phase 4 command routing is implemented with strict rejection when remote owner evidence is missing.
