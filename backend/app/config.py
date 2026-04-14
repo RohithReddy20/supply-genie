@@ -148,6 +148,9 @@ class Settings:
         "ACTION_WORKER_POLL_INTERVAL_S", 1.0, min_value=0.1
     )
 
+    # Workflow engine mode
+    workflow_engine_mode: str = os.getenv("WORKFLOW_ENGINE_MODE", "queue")
+
 
 def get_settings() -> Settings:
     return Settings()

@@ -38,8 +38,8 @@ Status legend:
 
 ## Phase 5 - Optional workflow orchestration
 - [x] Evaluate Temporal/Durable-style workflows against current queue model.
-- [ ] Migrate one high-value long-running workflow first.
-- [ ] Keep short/simple workflows on lightweight queue path.
+- [x] Migrate one high-value long-running workflow first (shipment-delay pilot migrated to workflow engine abstraction with queue-backed implementation).
+- [x] Keep short/simple workflows on lightweight queue path.
 
 ## Notes
 - Phase 1 application changes are complete.
@@ -53,3 +53,4 @@ Status legend:
 - Phase 4 stale-owner detection is enforced to prevent ambiguous command delivery.
 - Phase 0 baseline work is documented in operations runbooks and instrumented with queue/voice-command events.
 - Phase 5 evaluation is documented in docs/operations/workflow-orchestration-evaluation.md with explicit adoption gates.
+- Phase 5 pilot migration is in place via workflow engine abstraction while keeping queue-backed execution as default.

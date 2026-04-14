@@ -97,6 +97,12 @@
 - Added regression tests in backend/tests/test_regression.py covering both non-idempotent timeout dead-letter behavior and idempotent email timeout retriable behavior.
 - Validation: compile checks passed and combined suites (voice commands + workflow + regression) passed (50 total).
 
+## 2026-04-14 (phase-5 workflow engine pilot)
+- Added workflow engine abstraction in backend/app/services/workflows/engine.py with queue mode default and fail-closed durable mode placeholder.
+- Added queue-backed workflow implementation for shipment delay in backend/app/services/workflows/queue_engine.py.
+- Migrated legacy run_delay_workflow path to workflow engine abstraction in backend/app/services/orchestrator.py.
+- Added mode/behavior tests in backend/tests/test_workflow_engine.py and validated combined suites (54 passed).
+
 ## 2026-04-14 (phase-5 orchestration evaluation)
 - Added workflow orchestration evaluation in docs/operations/workflow-orchestration-evaluation.md comparing current queue model vs durable engine adoption.
 - Defined concrete adoption gates and proposed first migration candidate workflow.
