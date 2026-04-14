@@ -136,6 +136,7 @@ def _delay_incident(db, *, key="reg-delay-001", shipment_id=None):
         payload={
             "po_number": "PO-REG-001",
             "supplier_id": str(uuid.uuid4()),
+            "supplier_phone": "+15551234567",
             "delay_reason": "Port congestion",
             "new_eta": "2026-04-01",
         },
@@ -158,6 +159,7 @@ def _absence_incident(db, *, key="reg-absence-001"):
             "site_id": "SITE-01",
             "shift_date": "2026-03-22",
             "role": "Operator",
+            "contractor_phone": "+15557654321",
             "reason": "Sick leave",
         },
     )
@@ -475,6 +477,7 @@ class TestIdempotency:
             "shift_date": "2026-03-22",
             "role": "Operator",
             "reason": "Sick leave",
+            "contractor_phone": "+15557654321",
             "severity": "medium",
             "source": "hr_webhook",
         }
@@ -575,6 +578,7 @@ class TestFullWorkflows:
                              "shift_date": "2026-03-22",
                              "role": "Welder",
                              "reason": "Injury",
+                             "contractor_phone": "+15557654321",
                              "severity": "high",
                              "source": "hr_webhook",
                          })

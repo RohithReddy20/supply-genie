@@ -85,6 +85,7 @@ Create a `.env` file in the `backend/` directory with the following keys. You ca
 ```env
 # Database
 DATABASE_URL=postgresql+psycopg://localhost:5432/happy_robot  # Adjust to your database URI
+VOICE_STATE_REDIS_URL=redis://localhost:6379/0
 
 # LLM / Gemini Models
 VERTEX_AI_KEY=your_vertex_ai_key

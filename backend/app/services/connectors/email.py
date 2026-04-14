@@ -19,7 +19,13 @@ class EmailResult:
     error: str | None = None
 
 
-def send_email(to: str, subject: str, body: str) -> EmailResult:
+def send_email(
+    to: str,
+    subject: str,
+    body: str,
+    *,
+    idempotency_key: str | None = None,
+) -> EmailResult:
     settings = get_settings()
 
     if not settings.resend_api_key:
@@ -46,6 +52,8 @@ def send_email(to: str, subject: str, body: str) -> EmailResult:
 
         result = with_timeout(_send, settings.timeout_email_s, "email")
         email_id = result.get("id") if isinstance(result, dict) else getattr(result, "id", str(result))
+        if idempotency_key:
+            logger.info("Email idempotency key: %s", idempotency_key)
         logger.info("Email sent to %s (id=%s)", to, email_id)
         cb.record_success()
         return EmailResult(ok=True, to=to, email_id=str(email_id))

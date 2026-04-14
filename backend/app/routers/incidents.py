@@ -96,6 +96,8 @@ def create_absence_incident(
         shift_date=payload.shift_date,
         role=payload.role,
         reason=payload.reason,
+        contractor_id=payload.contractor_id,
+        contractor_phone=payload.contractor_phone,
         severity=payload.severity,
         source=payload.source,
         require_human_approval=settings.require_human_approval,

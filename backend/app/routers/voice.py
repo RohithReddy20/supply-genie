@@ -7,20 +7,47 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, WebSocket
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from twilio.rest import Client as TwilioClient
 from twilio.twiml.voice_response import Connect, VoiceResponse
 
 from app.config import get_settings
 from app.database import get_db
-from app.models import Incident, TranscriptEvent, VoiceSession
+from app.models import TranscriptEvent, VoiceSession
 from app.schemas import OutboundCallRequest, TranscriptEventOut, VoiceSessionOut
-from app.services.voice_pipeline import VoicePipelineSession
+from app.services.voice_pipeline import VoicePipelineSession, get_active_session_metadata
+from app.services.voice_state_store import get_voice_state_store
 
 logger = logging.getLogger("backend.voice_router")
 
 router = APIRouter(prefix="/voice", tags=["voice"])
+
+
+class ActiveVoiceSessionOut(BaseModel):
+    call_sid: str
+    stream_sid: str | None = None
+    incident_id: str | None = None
+    correlation_id: str
+    pod_id: str
+    started_at: datetime
+    last_heartbeat_at: datetime
+    stale: bool
+
+
+class VoiceCheckpointOut(BaseModel):
+    call_sid: str
+    stream_sid: str | None = None
+    incident_id: str | None = None
+    correlation_id: str
+    progress: dict[str, bool]
+    ready_to_close: bool
+    closing: bool
+    closed: bool
+    transcript: list[dict[str, str]]
+    transcript_entries: int
+    checkpoint_reason: str
+    checkpointed_at: datetime
 
 
 # ── Inbound call webhook ─────────────────────────────────────────────────
@@ -253,3 +280,21 @@ def get_session_transcript(
         .all()
     )
     return [TranscriptEventOut.model_validate(e) for e in events]
+
+
+@router.get("/active-sessions", response_model=list[ActiveVoiceSessionOut])
+def list_active_voice_sessions() -> list[ActiveVoiceSessionOut]:
+    """List active voice sessions and local pod ownership heartbeat."""
+    return [
+        ActiveVoiceSessionOut.model_validate(item)
+        for item in get_active_session_metadata()
+    ]
+
+
+@router.get("/checkpoints/{call_sid}", response_model=VoiceCheckpointOut | None)
+async def get_voice_checkpoint(call_sid: str) -> VoiceCheckpointOut | None:
+    """Get the latest Redis checkpoint for an active/interrupted call."""
+    checkpoint = await get_voice_state_store().get(call_sid)
+    if not checkpoint:
+        return None
+    return VoiceCheckpointOut.model_validate(checkpoint)

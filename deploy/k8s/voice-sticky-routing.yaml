@@ -1,0 +1,58 @@
+# Kubernetes sticky-routing baseline for voice websocket traffic.
+#
+# Apply this as a starting point and adjust names/namespace/ports for your cluster.
+#
+# Notes:
+# - Twilio media streams use long-lived websocket connections.
+# - Service-level ClientIP affinity keeps traffic from one client IP on one backend Pod.
+# - Ingress upstream hash by remote address adds another stable-routing layer.
+# - This does not replace durable session state; it only reduces cross-pod churn.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: supply-genie-backend
+  namespace: supply-genie
+spec:
+  selector:
+    app: supply-genie-backend
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+  type: ClusterIP
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: supply-genie-backend
+  namespace: supply-genie
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/upstream-hash-by: "$remote_addr"
+    nginx.ingress.kubernetes.io/websocket-services: "supply-genie-backend"
+spec:
+  rules:
+    - host: api.example.com
+      http:
+        paths:
+          - path: /api/v1/voice/media-stream
+            pathType: Prefix
+            backend:
+              service:
+                name: supply-genie-backend
+                port:
+                  number: 80
+          - path: /api/v1
+            pathType: Prefix
+            backend:
+              service:
+                name: supply-genie-backend
+                port:
+                  number: 80

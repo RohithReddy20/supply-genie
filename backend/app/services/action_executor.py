@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -19,6 +19,11 @@ from app.services.connectors.slack import send_message as slack_send
 from app.services.connectors.twilio_voice import make_call
 
 logger = logging.getLogger("backend.action_executor")
+
+
+def _action_idempotency_key(action: ActionRun) -> str:
+    """Stable idempotency key for a logical action across retries."""
+    return f"action:{action.id}"
 
 
 def execute_pending_actions(db: Session, incident: Incident) -> list[ActionRun]:
@@ -157,10 +162,16 @@ def _execute_slack(action: ActionRun, payload: dict) -> bool:
             f"Coordination workflow in progress."
         )
 
-    action.request_payload = {"channel": get_settings().slack_default_channel, "message": message}
+    idempotency_key = _action_idempotency_key(action)
+    action.request_payload = {
+        "channel": get_settings().slack_default_channel,
+        "message": message,
+        "idempotency_key": idempotency_key,
+    }
 
-    result = slack_send(channel=None, message=message)
+    result = slack_send(channel=None, message=message, idempotency_key=idempotency_key)
     action.response_payload = asdict(result)
+    action.response_payload["idempotency_key"] = idempotency_key
 
     if not result.ok:
         action.error_message = result.error
@@ -233,10 +244,17 @@ def _execute_call(db: Session, action: ActionRun, payload: dict, call_type: str)
         action.error_message = "No destination phone number available"
         return False
 
-    action.request_payload = {"to": to, "message": message, "call_type": call_type}
+    idempotency_key = _action_idempotency_key(action)
+    action.request_payload = {
+        "to": to,
+        "message": message,
+        "call_type": call_type,
+        "idempotency_key": idempotency_key,
+    }
 
-    result = make_call(to=to, message=message)
+    result = make_call(to=to, message=message, idempotency_key=idempotency_key)
     action.response_payload = asdict(result)
+    action.response_payload["idempotency_key"] = idempotency_key
 
     if not result.ok:
         action.error_message = result.error
@@ -276,10 +294,21 @@ def _execute_email(db: Session, action: ActionRun, payload: dict, incident: Inci
         f"<p>Best regards,<br>Supply Chain Coordination Team</p>"
     )
 
-    action.request_payload = {"to": customer_email, "subject": subject}
+    idempotency_key = _action_idempotency_key(action)
+    action.request_payload = {
+        "to": customer_email,
+        "subject": subject,
+        "idempotency_key": idempotency_key,
+    }
 
-    result = send_email(to=customer_email, subject=subject, body=body)
+    result = send_email(
+        to=customer_email,
+        subject=subject,
+        body=body,
+        idempotency_key=idempotency_key,
+    )
     action.response_payload = asdict(result)
+    action.response_payload["idempotency_key"] = idempotency_key
 
     if not result.ok:
         action.error_message = result.error
@@ -301,6 +330,7 @@ def _execute_po_update(db: Session, action: ActionRun, payload: dict) -> bool:
         "po_number": po_number,
         "new_status": POStatus.amended.value,
         "notes": notes,
+        "idempotency_key": _action_idempotency_key(action),
     }
 
     result = po_update(db, po_number=po_number, new_status=POStatus.amended, notes=notes)
@@ -325,6 +355,7 @@ def _execute_labor_update(action: ActionRun, payload: dict) -> bool:
         "shift_date": shift_date,
         "role": role,
         "status": "absent",
+        "idempotency_key": _action_idempotency_key(action),
     }
 
     result = update_labor_record(
@@ -357,11 +388,13 @@ def _execute_notify_manager(action: ActionRun, payload: dict) -> bool:
     role = payload.get("role", "general")
     reason = payload.get("reason", "")
 
+    idempotency_key = _action_idempotency_key(action)
     action.request_payload = {
         "site_id": site_id,
         "worker_name": worker_name,
         "shift_date": shift_date,
         "role": role,
+        "idempotency_key": idempotency_key,
     }
 
     result = notify_site_manager(
@@ -370,12 +403,14 @@ def _execute_notify_manager(action: ActionRun, payload: dict) -> bool:
         shift_date=shift_date,
         role=role,
         reason=reason,
+        idempotency_key=idempotency_key,
     )
     action.response_payload = {
         "ok": result.ok,
         "channel": result.channel,
         "ts": result.ts,
         "error": result.error,
+        "idempotency_key": idempotency_key,
     }
 
     if not result.ok:
@@ -402,8 +437,14 @@ def _handle_failure(action: ActionRun) -> None:
         action.response_payload["dead_lettered"] = True
     else:
         action.status = ActionStatus.failed
+        delay_ms = backoff_delay_ms(action.retry_count)
+        next_retry_at = datetime.now(timezone.utc) + timedelta(milliseconds=delay_ms)
+        if action.response_payload is None:
+            action.response_payload = {}
+        action.response_payload["next_retry_at"] = next_retry_at.isoformat()
+        action.response_payload["next_retry_in_ms"] = delay_ms
         logger.info(
             "Action %s failed (attempt %d/%d), next backoff ~%dms",
             action.id, action.retry_count, settings.max_retries,
-            backoff_delay_ms(action.retry_count),
+            delay_ms,
         )

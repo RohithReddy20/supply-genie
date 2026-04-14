@@ -19,6 +19,8 @@ uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - `GET /health/ready`
 - `POST /api/v1/orchestration/delay`
 - `POST /api/v1/connectors/slack/notify`
+- `GET /api/v1/voice/active-sessions`
+- `GET /api/v1/voice/checkpoints/{call_sid}`
 
 This is setup-only code. No real external side effects are executed yet.
 
@@ -32,6 +34,12 @@ Use these environment variables to tune live voice responsiveness:
 - `VOICE_OUTBOUND_AUDIO_QUEUE_MAX` (default `24`)
 - `VOICE_VAD_PREFIX_PADDING_MS` (default `60`)
 - `VOICE_VAD_SILENCE_DURATION_MS` (default `260`)
+- `VOICE_STATE_REDIS_URL` (default empty; enables Redis-backed active-call checkpoints when set)
+- `VOICE_STATE_CHECKPOINT_INTERVAL_S` (default `5.0`)
+- `VOICE_STATE_TTL_S` (default `3600`)
+- `VOICE_STATE_TRANSCRIPT_MAX_ENTRIES` (default `200`)
+- `ACTION_EXECUTION_MODE` (default `inline`; set `queued` to enable background worker)
+- `ACTION_WORKER_POLL_INTERVAL_S` (default `1.0`)
 
 Probe scripts for iterative latency testing:
 
