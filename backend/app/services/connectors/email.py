@@ -41,13 +41,16 @@ def send_email(
 
     try:
         def _send():
+            payload = {
+                "from": settings.email_from,
+                "to": [to],
+                "subject": subject,
+                "html": body,
+            }
+            if idempotency_key:
+                return resend.Emails.send(payload, {"idempotency_key": idempotency_key})
             return resend.Emails.send(
-                {
-                    "from": settings.email_from,
-                    "to": [to],
-                    "subject": subject,
-                    "html": body,
-                }
+                payload
             )
 
         result = with_timeout(_send, settings.timeout_email_s, "email")

@@ -31,6 +31,10 @@ Queue status includes runtime worker fields for rollout health:
 - `worker_processed_total`
 - `worker_last_error`
 
+Idempotency notes:
+- Action executions carry deterministic idempotency keys (`action:{action_id}`).
+- Email connector enforces provider-side idempotency by forwarding this key to Resend.
+
 This is setup-only code. No real external side effects are executed yet.
 
 ### Voice latency tuning

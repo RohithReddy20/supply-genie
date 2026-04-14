@@ -67,3 +67,8 @@
 - Kept queue/dead-letter endpoint contract stable while enriching operational visibility for queued-mode rollout.
 - Extended regression coverage to assert presence of worker runtime fields in queue status response.
 - Validation: compile checks passed and full suites tests/test_workflow_b.py + tests/test_regression.py passed (43 total).
+
+## 2026-04-14 (phase-3 provider idempotency: email)
+- Enabled real provider-side idempotency enforcement for email by passing idempotency_key to Resend send options in backend/app/services/connectors/email.py.
+- Added focused unit coverage for email idempotency option behavior in backend/tests/test_resilience.py (with and without key).
+- Validation: compile checks passed and combined suites (resilience idempotency + workflow + regression) passed (45 total).

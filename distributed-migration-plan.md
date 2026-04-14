@@ -29,7 +29,7 @@ Status legend:
 - [x] Add job queue abstraction for connector actions.
 - [~] Move execute_pending_actions out of request thread into workers (enabled via ACTION_EXECUTION_MODE=queued rollout flag).
 - [x] Add retry with backoff and dead-letter handling (worker auto-requeue plus dead-letter visibility and manual requeue endpoints).
-- [~] Add per-action idempotency guard for external side effects (deterministic idempotency-key propagation added; provider-side enforcement tuning pending).
+- [~] Add per-action idempotency guard for external side effects (deterministic propagation complete; provider-side enforcement enabled for email/Resend and pending for remaining connectors).
 
 ## Phase 4 - Cross-pod active-call control plane
 - [ ] Add owner-pod command dispatch channel (pub/sub or queue).
