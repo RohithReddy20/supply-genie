@@ -63,6 +63,21 @@ class VoiceControlCommandOut(BaseModel):
     result: str
 
 
+def _checkpoint_is_stale(checkpoint: dict) -> bool:
+    raw_ts = checkpoint.get("checkpointed_at")
+    if not raw_ts:
+        return True
+
+    try:
+        checkpointed_at = datetime.fromisoformat(str(raw_ts))
+    except ValueError:
+        return True
+
+    age_s = (datetime.now(timezone.utc) - checkpointed_at).total_seconds()
+    settings = get_settings()
+    return age_s > settings.voice_owner_stale_after_s
+
+
 # ── Inbound call webhook ─────────────────────────────────────────────────
 
 
@@ -351,6 +366,12 @@ async def send_voice_command(
         raise HTTPException(
             status_code=404,
             detail="Active call not found locally and no active checkpoint exists for remote routing",
+        )
+
+    if _checkpoint_is_stale(checkpoint):
+        raise HTTPException(
+            status_code=409,
+            detail="Owner checkpoint is stale; command rejected by fail-closed stale-owner policy",
         )
 
     await bus.publish(call_sid, command, body.payload)

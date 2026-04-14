@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -68,7 +69,10 @@ class TestVoiceControlCommandRouting:
         fake_bus.publish = AsyncMock(return_value=None)
 
         fake_store = MagicMock()
-        fake_store.get = AsyncMock(return_value={"call_sid": "CA_REMOTE"})
+        fake_store.get = AsyncMock(return_value={
+            "call_sid": "CA_REMOTE",
+            "checkpointed_at": datetime.now(timezone.utc).isoformat(),
+        })
 
         with patch("app.routers.voice.get_active_sessions", return_value={}), \
              patch("app.routers.voice.get_voice_command_bus", return_value=fake_bus), \
@@ -102,6 +106,25 @@ class TestVoiceControlCommandRouting:
             )
 
         assert r.status_code == 404
+
+    def test_remote_command_rejects_stale_checkpoint(self, client):
+        fake_bus = MagicMock()
+        fake_bus.enabled = True
+        fake_bus.publish = AsyncMock(return_value=None)
+
+        stale_ts = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        fake_store = MagicMock()
+        fake_store.get = AsyncMock(return_value={"call_sid": "CA_REMOTE", "checkpointed_at": stale_ts})
+
+        with patch("app.routers.voice.get_active_sessions", return_value={}), \
+             patch("app.routers.voice.get_voice_command_bus", return_value=fake_bus), \
+             patch("app.routers.voice.get_voice_state_store", return_value=fake_store):
+            r = client.post(
+                "/api/v1/voice/commands/CA_REMOTE",
+                json={"command": "end_call"},
+            )
+
+        assert r.status_code == 409
 
     def test_unsupported_command_rejected(self, client):
         r = client.post(

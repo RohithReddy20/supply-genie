@@ -34,7 +34,7 @@ Status legend:
 ## Phase 4 - Cross-pod active-call control plane
 - [x] Add owner-pod command dispatch channel (Redis queue per call_sid).
 - [x] Route non-owner control requests to owner pod via command bus with checkpoint presence validation.
-- [ ] Add stale-owner detection and takeover policy.
+- [x] Add stale-owner detection and fail-closed policy (reject stale owner checkpoint routes).
 
 ## Phase 5 - Optional workflow orchestration
 - [ ] Evaluate Temporal/Durable-style workflows against current queue model.
@@ -50,3 +50,4 @@ Status legend:
 - Phase 3 includes operational queue/dead-letter control endpoints for safe rollout.
 - Queue status now exposes worker runtime health fields (running/cycle/error/processed count) for safer queued-mode rollout.
 - Phase 4 command routing is implemented with strict rejection when remote owner evidence is missing.
+- Phase 4 stale-owner detection is enforced to prevent ambiguous command delivery.

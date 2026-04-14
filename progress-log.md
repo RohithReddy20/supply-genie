@@ -79,3 +79,9 @@
 - Added command endpoint POST /api/v1/voice/commands/{call_sid} in backend/app/routers/voice.py with strict remote routing validation (requires active checkpoint evidence for non-local calls).
 - Added regression coverage for local command dispatch, remote command bus routing, unsupported command rejection, and missing-checkpoint rejection in backend/tests/test_voice_commands.py.
 - Validation: compile checks passed and combined suites (voice commands + workflow + regression) passed (47 total).
+
+## 2026-04-14 (phase-4 stale-owner fail-closed)
+- Added owner staleness threshold config in backend/app/config.py (`VOICE_OWNER_STALE_AFTER_S`).
+- Enforced stale-owner rejection in backend/app/routers/voice.py for remote command routing when checkpoint recency is outside threshold.
+- Added regression coverage for stale checkpoint rejection in backend/tests/test_voice_commands.py.
+- Validation: combined suites (voice commands + workflow + regression) passed (48 total).

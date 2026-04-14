@@ -136,6 +136,9 @@ class Settings:
     voice_command_queue_ttl_s: int = _env_int(
         "VOICE_COMMAND_QUEUE_TTL_S", 1800, min_value=30
     )
+    voice_owner_stale_after_s: float = _env_float(
+        "VOICE_OWNER_STALE_AFTER_S", 20.0, min_value=1.0
+    )
     voice_state_redis_url: str = os.getenv("VOICE_STATE_REDIS_URL", "")
     pod_id: str = os.getenv("POD_ID") or os.getenv("HOSTNAME", "local-dev")
 
