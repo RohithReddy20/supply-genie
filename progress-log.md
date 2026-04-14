@@ -91,3 +91,8 @@
 - Added failure drill checklist runbook in docs/operations/failure-drill-checklist.md.
 - Added SLO and alert baseline runbook in docs/operations/slo-and-alert-baseline.md.
 - Validation: compile checks passed and combined suites (voice commands + workflow + regression) passed (48 total).
+
+## 2026-04-14 (phase-3 fail-closed timeout policy)
+- Added fail-closed timeout handling in backend/app/services/action_executor.py for non-idempotent connectors (Slack/Twilio/manager notify): timeout-like errors now dead-letter immediately to avoid duplicate side effects.
+- Added regression tests in backend/tests/test_regression.py covering both non-idempotent timeout dead-letter behavior and idempotent email timeout retriable behavior.
+- Validation: compile checks passed and combined suites (voice commands + workflow + regression) passed (50 total).
