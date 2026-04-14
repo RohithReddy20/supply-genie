@@ -61,3 +61,9 @@
 	- POST /api/v1/incidents/actions/{action_id}/requeue
 - Added regression coverage for dead-letter listing, queue status, and manual requeue flows in backend/tests/test_regression.py.
 - Validation: targeted new tests passed and broader suites passed (tests/test_workflow_b.py + tests/test_regression.py).
+
+## 2026-04-14 (phase-3 worker observability)
+- Extended queue status reporting in backend/app/services/action_dispatcher.py with worker runtime state: running flag, last cycle timestamp, processed total, and last error.
+- Kept queue/dead-letter endpoint contract stable while enriching operational visibility for queued-mode rollout.
+- Extended regression coverage to assert presence of worker runtime fields in queue status response.
+- Validation: compile checks passed and full suites tests/test_workflow_b.py + tests/test_regression.py passed (43 total).

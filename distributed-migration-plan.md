@@ -48,3 +48,4 @@ Status legend:
 - Phase 2 checkpoint write/read paths are in place.
 - Phase 3 dispatcher + background worker scaffolding is in place behind a rollout flag.
 - Phase 3 includes operational queue/dead-letter control endpoints for safe rollout.
+- Queue status now exposes worker runtime health fields (running/cycle/error/processed count) for safer queued-mode rollout.

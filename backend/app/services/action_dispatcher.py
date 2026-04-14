@@ -17,6 +17,12 @@ from app.services.action_executor import execute_pending_actions
 logger = logging.getLogger("backend.action_dispatcher")
 
 _worker_task: asyncio.Task | None = None
+_worker_state: dict[str, object] = {
+    "running": False,
+    "last_cycle_at": None,
+    "processed_total": 0,
+    "last_error": None,
+}
 
 
 def _is_queued_mode() -> bool:
@@ -49,7 +55,7 @@ def enqueue_pending_actions(db, incident_id: UUID) -> int:
     return cast(int, rows or 0)
 
 
-def get_queue_status(db: Session) -> dict[str, int | str]:
+def get_queue_status(db: Session) -> dict[str, object]:
     """Return queue/dead-letter status counts for operational visibility."""
     settings = get_settings()
     queued = db.scalar(
@@ -73,12 +79,17 @@ def get_queue_status(db: Session) -> dict[str, int | str]:
         )
     )
 
+    last_cycle = _worker_state.get("last_cycle_at")
     return {
         "mode": "queued" if _is_queued_mode() else "inline",
         "queued": int(queued or 0),
         "in_progress": int(in_progress or 0),
         "retriable_failed": int(retriable_failed or 0),
         "dead_lettered": int(dead_lettered or 0),
+        "worker_running": bool(_worker_state.get("running", False)),
+        "worker_last_cycle_at": last_cycle.isoformat() if isinstance(last_cycle, datetime) else None,
+        "worker_processed_total": int(_worker_state.get("processed_total", 0) or 0),
+        "worker_last_error": str(_worker_state.get("last_error")) if _worker_state.get("last_error") else None,
     }
 
 
@@ -117,6 +128,8 @@ async def start_action_worker() -> None:
     if not _is_queued_mode() or _worker_task is not None:
         return
     _worker_task = asyncio.create_task(_worker_loop(), name="action-queue-worker")
+    _worker_state["running"] = True
+    _worker_state["last_error"] = None
     logger.info("Action queue worker started")
 
 
@@ -131,6 +144,7 @@ async def stop_action_worker() -> None:
     except asyncio.CancelledError:
         pass
     _worker_task = None
+    _worker_state["running"] = False
     logger.info("Action queue worker stopped")
 
 
@@ -139,13 +153,17 @@ async def _worker_loop() -> None:
 
     while True:
         try:
+            _worker_state["last_cycle_at"] = datetime.now(timezone.utc)
             _requeue_due_failed_actions()
             processed = _process_next_queued_incident()
+            if processed:
+                _worker_state["processed_total"] = int(_worker_state.get("processed_total", 0) or 0) + 1
             if not processed:
                 await asyncio.sleep(poll_interval_s)
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
+            _worker_state["last_error"] = str(exc)
             logger.exception("Action queue worker iteration failed")
             await asyncio.sleep(poll_interval_s)
 

@@ -25,6 +25,12 @@ uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - `GET /api/v1/incidents/actions/dead-letter`
 - `POST /api/v1/incidents/actions/{action_id}/requeue`
 
+Queue status includes runtime worker fields for rollout health:
+- `worker_running`
+- `worker_last_cycle_at`
+- `worker_processed_total`
+- `worker_last_error`
+
 This is setup-only code. No real external side effects are executed yet.
 
 ### Voice latency tuning

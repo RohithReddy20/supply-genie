@@ -389,6 +389,9 @@ class TestRetryBehavior:
         assert data["mode"] == "inline"
         assert data["queued"] >= 1
         assert data["dead_lettered"] >= 1
+        assert "worker_running" in data
+        assert "worker_last_cycle_at" in data
+        assert "worker_processed_total" in data
 
 
 # ═══════════════════════════════════════════════════════════════════════════
