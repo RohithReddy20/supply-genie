@@ -13,6 +13,7 @@ Pipecat handles:
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 import json
 import logging
 from datetime import datetime, timezone
@@ -49,7 +50,9 @@ from pipecat.transports.websocket.fastapi import (
 from starlette.websockets import WebSocket
 
 from app.config import get_settings
+from app.services.voice_command_bus import get_voice_command_bus
 from app.services.voice_prompts import build_system_instruction
+from app.services.voice_state_store import get_voice_state_store
 from app.services.voice_tools import TOOL_DECLARATIONS, execute_tool
 
 logger = logging.getLogger("backend.voice_pipeline")
@@ -57,11 +60,63 @@ logger = logging.getLogger("backend.voice_pipeline")
 # ── Active session registry ─────────────────────────────────────────────
 
 _active_sessions: dict[str, "VoicePipelineSession"] = {}
+_active_session_meta: dict[str, dict[str, Any]] = {}
 
 
 def get_active_sessions() -> dict[str, "VoicePipelineSession"]:
     """Return the active session registry (used by shutdown handler)."""
     return _active_sessions
+
+
+def get_active_session_metadata() -> list[dict[str, Any]]:
+    """Return active session ownership details for operational visibility."""
+    now = datetime.now(timezone.utc)
+    settings = get_settings()
+    stale_after_s = max(settings.voice_session_heartbeat_s * 3, 15.0)
+
+    snapshot: list[dict[str, Any]] = []
+    for meta in _active_session_meta.values():
+        last_heartbeat = meta["last_heartbeat_at"]
+        age_s = (now - last_heartbeat).total_seconds()
+        snapshot.append({
+            "call_sid": meta["call_sid"],
+            "stream_sid": meta["stream_sid"],
+            "incident_id": meta["incident_id"],
+            "correlation_id": meta["correlation_id"],
+            "pod_id": meta["pod_id"],
+            "started_at": meta["started_at"],
+            "last_heartbeat_at": last_heartbeat,
+            "stale": age_s > stale_after_s,
+        })
+    snapshot.sort(key=lambda item: item["started_at"], reverse=True)
+    return snapshot
+
+
+def _register_active_session(session: "VoicePipelineSession") -> None:
+    settings = get_settings()
+    now = datetime.now(timezone.utc)
+    _active_sessions[session.call_sid] = session
+    _active_session_meta[session.call_sid] = {
+        "call_sid": session.call_sid,
+        "stream_sid": session.stream_sid,
+        "incident_id": session.incident_id,
+        "correlation_id": session.correlation_id,
+        "pod_id": settings.pod_id,
+        "started_at": now,
+        "last_heartbeat_at": now,
+    }
+
+
+def _touch_active_session(call_sid: str) -> None:
+    meta = _active_session_meta.get(call_sid)
+    if not meta:
+        return
+    meta["last_heartbeat_at"] = datetime.now(timezone.utc)
+
+
+def _unregister_active_session(call_sid: str) -> None:
+    _active_sessions.pop(call_sid, None)
+    _active_session_meta.pop(call_sid, None)
 
 
 # ── VAD sensitivity helpers ─────────────────────────────────────────────
@@ -264,6 +319,9 @@ class VoicePipelineSession:
         self.greeting = greeting
         self.correlation_id = str(uuid4())
         self._lifecycle: CallLifecycleManager | None = None
+        self._heartbeat_task: asyncio.Task | None = None
+        self._command_bus = get_voice_command_bus()
+        self._state_store = get_voice_state_store()
         self._last_clear_ts = 0.0
 
     @property
@@ -289,7 +347,8 @@ class VoicePipelineSession:
             self.greeting = custom_params["greeting"]
 
         # Register in active sessions
-        _active_sessions[self.call_sid] = self
+        _register_active_session(self)
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
         # ── Step 2: Build system instruction ────────────────────────────
         system_instruction = build_system_instruction(self.incident_id, self.call_sid)
@@ -305,6 +364,7 @@ class VoicePipelineSession:
             incident_id=self.incident_id,
         )
         self._lifecycle = lifecycle
+        await self._checkpoint_state(reason="session_started")
 
         # ── Step 4: Set up Pipecat transport ────────────────────────────
         serializer = TwilioFrameSerializer(
@@ -439,8 +499,13 @@ class VoicePipelineSession:
             await runner.run(task)
         finally:
             lifecycle.mark_closed()
+            if self._heartbeat_task and not self._heartbeat_task.done():
+                self._heartbeat_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self._heartbeat_task
+            await self._delete_state_checkpoint()
             # Remove from active sessions
-            _active_sessions.pop(self.call_sid, None)
+            _unregister_active_session(self.call_sid)
 
         logger.info("Pipecat pipeline ended (call_sid=%s)", self.call_sid)
 
@@ -465,6 +530,7 @@ class VoicePipelineSession:
                     "system",
                     f"Tool call: end_call({{}}) → call closure initiated",
                 )
+                await self._checkpoint_state(reason="tool_end_call")
                 await lifecycle.begin_graceful_close()
                 return
 
@@ -516,6 +582,7 @@ class VoicePipelineSession:
                         f"Ask about these in your NEXT question."
                     )
 
+                await self._checkpoint_state(reason="tool_update_call_progress")
                 await params.result_callback({"result": result_text})
                 return
 
@@ -572,3 +639,114 @@ class VoicePipelineSession:
             logger.debug("Sent Twilio clear on interruption (%s, call_sid=%s)", source, self.call_sid)
         except Exception:
             logger.exception("Failed sending Twilio clear on interruption")
+
+    async def _heartbeat_loop(self) -> None:
+        """Refresh active-session heartbeat while the call is alive."""
+        settings = get_settings()
+        heartbeat_every_s = max(settings.voice_session_heartbeat_s, 1.0)
+        checkpoint_every_s = max(settings.voice_state_checkpoint_interval_s, 1.0)
+        command_poll_every_s = max(settings.voice_command_poll_interval_s, 0.1)
+        loop_every_s = min(heartbeat_every_s, checkpoint_every_s, command_poll_every_s)
+        last_heartbeat = monotonic()
+        last_checkpoint = monotonic()
+        last_command_poll = monotonic()
+
+        while True:
+            await asyncio.sleep(loop_every_s)
+            now = monotonic()
+
+            if now - last_heartbeat >= heartbeat_every_s:
+                _touch_active_session(self.call_sid)
+                last_heartbeat = now
+
+            if now - last_checkpoint >= checkpoint_every_s:
+                await self._checkpoint_state(reason="periodic")
+                last_checkpoint = now
+
+            if now - last_command_poll >= command_poll_every_s:
+                await self._poll_control_commands()
+                last_command_poll = now
+
+    async def dispatch_control_command(
+        self,
+        command: str,
+        payload: dict[str, Any] | None = None,
+    ) -> str:
+        """Execute a control command on the active call session."""
+        lifecycle = self._lifecycle
+        if not lifecycle:
+            raise RuntimeError("Session lifecycle not initialized")
+
+        if command == "end_call":
+            reason = (payload or {}).get("reason", "external_command")
+            lifecycle.append_transcript(
+                "system",
+                f"External command: end_call(reason={reason})",
+            )
+            await self._checkpoint_state(reason="external_command_end_call")
+            await lifecycle.begin_graceful_close()
+            return "graceful_close_started"
+
+        raise ValueError(f"Unsupported control command: {command}")
+
+    async def _poll_control_commands(self) -> None:
+        """Consume and execute queued control commands for this call."""
+        if not self._command_bus.enabled:
+            return
+
+        command = await self._command_bus.pop(self.call_sid)
+        if not command:
+            return
+
+        command_name = str(command.get("command", "")).strip()
+        payload = command.get("payload")
+        try:
+            await self.dispatch_control_command(command_name, payload if isinstance(payload, dict) else {})
+            logger.info("Processed remote voice command %s (call_sid=%s)", command_name, self.call_sid)
+        except Exception:
+            logger.exception("Failed processing remote voice command %s (call_sid=%s)", command_name, self.call_sid)
+
+    def _build_state_snapshot(self, reason: str) -> dict[str, Any] | None:
+        """Build an active-call snapshot to persist in Redis."""
+        lifecycle = self._lifecycle
+        if not lifecycle:
+            return None
+
+        settings = get_settings()
+        transcript_tail = lifecycle.transcript[-settings.voice_state_transcript_max_entries :]
+        return {
+            "call_sid": self.call_sid,
+            "stream_sid": self.stream_sid,
+            "incident_id": self.incident_id,
+            "correlation_id": self.correlation_id,
+            "pod_id": settings.pod_id,
+            "progress": dict(lifecycle._progress),
+            "ready_to_close": lifecycle._ready_to_close,
+            "closing": lifecycle._closing,
+            "closed": lifecycle._closed,
+            "transcript": transcript_tail,
+            "transcript_entries": len(lifecycle.transcript),
+            "checkpoint_reason": reason,
+            "checkpointed_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    async def _checkpoint_state(self, *, reason: str) -> None:
+        """Persist current active-call snapshot in Redis with TTL."""
+        if not self._state_store.enabled:
+            return
+        snapshot = self._build_state_snapshot(reason)
+        if not snapshot:
+            return
+        try:
+            await self._state_store.checkpoint(self.call_sid, snapshot)
+        except Exception:
+            logger.exception("Failed to checkpoint voice state (call_sid=%s)", self.call_sid)
+
+    async def _delete_state_checkpoint(self) -> None:
+        """Delete active-call checkpoint after clean completion."""
+        if not self._state_store.enabled:
+            return
+        try:
+            await self._state_store.delete(self.call_sid)
+        except Exception:
+            logger.exception("Failed to delete voice checkpoint (call_sid=%s)", self.call_sid)

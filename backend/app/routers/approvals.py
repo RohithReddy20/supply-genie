@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import ActionStatus, Approval, ApprovalStatus
-from app.services.action_executor import execute_pending_actions
+from app.services.action_dispatcher import dispatch_incident_actions
 
 router = APIRouter(prefix="/approvals", tags=["approvals"])
 
@@ -106,7 +106,7 @@ def decide_approval(
 
         incident = approval.incident
         db.refresh(incident)
-        execute_pending_actions(db, incident)
+        dispatch_incident_actions(db, incident)
         db.refresh(action)
 
         next_status = action.status.value

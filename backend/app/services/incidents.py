@@ -18,6 +18,7 @@ from app.models import (
     Severity,
 )
 from app.observability import record_incident_created
+from app.services.action_dispatcher import dispatch_incident_actions
 from app.services.safety import check_human_approval_required
 
 # ── Playbook Definitions ────────────────────────────────────────────────
@@ -101,8 +102,7 @@ def ingest_delay(
     db.refresh(incident)
     record_incident_created("shipment_delay")
 
-    from app.services.action_executor import execute_pending_actions
-    execute_pending_actions(db, incident)
+    dispatch_incident_actions(db, incident)
     db.refresh(incident)
 
     return incident, False
@@ -117,6 +117,8 @@ def ingest_absence(
     shift_date: str,
     role: str,
     reason: str,
+    contractor_id: UUID | None,
+    contractor_phone: str | None,
     severity: Severity,
     source: str,
     require_human_approval: bool,
@@ -138,6 +140,8 @@ def ingest_absence(
             "shift_date": shift_date,
             "role": role,
             "reason": reason,
+            "contractor_id": str(contractor_id) if contractor_id else None,
+            "contractor_phone": contractor_phone,
         },
     )
     db.add(incident)
@@ -161,8 +165,7 @@ def ingest_absence(
     db.refresh(incident)
     record_incident_created("worker_absence")
 
-    from app.services.action_executor import execute_pending_actions
-    execute_pending_actions(db, incident)
+    dispatch_incident_actions(db, incident)
     db.refresh(incident)
 
     return incident, False
