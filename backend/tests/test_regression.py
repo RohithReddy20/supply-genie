@@ -136,6 +136,7 @@ def _delay_incident(db, *, key="reg-delay-001", shipment_id=None):
         payload={
             "po_number": "PO-REG-001",
             "supplier_id": str(uuid.uuid4()),
+            "supplier_phone": "+15551234567",
             "delay_reason": "Port congestion",
             "new_eta": "2026-04-01",
         },
@@ -158,6 +159,7 @@ def _absence_incident(db, *, key="reg-absence-001"):
             "site_id": "SITE-01",
             "shift_date": "2026-03-22",
             "role": "Operator",
+            "contractor_phone": "+15557654321",
             "reason": "Sick leave",
         },
     )
@@ -334,6 +336,94 @@ class TestRetryBehavior:
         data = r.json()
         assert data["count"] == 1
 
+    def test_dead_letter_endpoint_lists_exhausted_actions(self, client, db):
+        inc = _delay_incident(db, key="reg-dead-letter-001")
+        action = _add_action(db, inc, seq=1, atype=ActionType.slack_notify)
+        action.status = ActionStatus.failed
+        action.retry_count = 3
+        action.error_message = "Permanent failure"
+        action.response_payload = {"dead_lettered": True, "fallback_message": "Manual intervention required"}
+        db.commit()
+
+        r = client.get("/api/v1/incidents/actions/dead-letter?limit=10")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["count"] >= 1
+        assert any(item["action_id"] == str(action.id) for item in data["items"])
+
+    @patch("app.services.action_executor.slack_send")
+    def test_requeue_failed_action_endpoint(self, mock_slack, client, db):
+        mock_slack.return_value = SlackResult(ok=True, channel="#ops", ts="789")
+        inc = _delay_incident(db, key="reg-requeue-action-001")
+        action = _add_action(db, inc, seq=1, atype=ActionType.slack_notify)
+        action.status = ActionStatus.failed
+        action.retry_count = 3
+        action.error_message = "Permanent failure"
+        action.response_payload = {"dead_lettered": True, "fallback_message": "Manual intervention required"}
+        db.commit()
+
+        r = client.post(f"/api/v1/incidents/actions/{action.id}/requeue")
+        assert r.status_code == 200
+        payload = r.json()
+        assert payload["dispatch_mode"] == "inline"
+        assert payload["next_status"] == "completed"
+        assert payload["retry_count"] == 0
+
+        db.refresh(action)
+        assert action.status == ActionStatus.completed
+        assert action.retry_count == 0
+        assert "dead_lettered" not in (action.response_payload or {})
+
+    def test_queue_status_endpoint(self, client, db):
+        inc = _delay_incident(db, key="reg-queue-status-001")
+        queued_action = _add_action(db, inc, seq=1, atype=ActionType.slack_notify)
+        queued_action.status = ActionStatus.queued
+        failed_action = _add_action(db, inc, seq=2, atype=ActionType.call_production)
+        failed_action.status = ActionStatus.failed
+        failed_action.retry_count = 3
+        db.commit()
+
+        r = client.get("/api/v1/incidents/queue/status")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["mode"] == "inline"
+        assert data["queued"] >= 1
+        assert data["dead_lettered"] >= 1
+        assert "worker_running" in data
+        assert "worker_last_cycle_at" in data
+        assert "worker_processed_total" in data
+
+    @patch("app.services.action_executor.make_call")
+    def test_non_idempotent_timeout_dead_letters_immediately(self, mock_call, db):
+        mock_call.return_value = CallResult(ok=False, to="+1555", error="Timeout after 15.0s")
+        inc = _delay_incident(db, key="reg-timeout-fail-closed-001")
+        action = _add_action(db, inc, seq=1, atype=ActionType.call_production)
+        db.commit()
+        db.refresh(inc)
+
+        execute_pending_actions(db, inc)
+        db.refresh(action)
+
+        assert action.status == ActionStatus.failed
+        assert action.retry_count == 3  # max_retries default
+        assert (action.response_payload or {}).get("dead_lettered") is True
+        assert (action.response_payload or {}).get("uncertain_outcome") is True
+
+    @patch("app.services.action_executor.send_email")
+    def test_idempotent_timeout_still_retriable(self, mock_email, db, shipment):
+        mock_email.return_value = EmailResult(ok=False, to="buyer@example.com", error="Timeout after 10.0s")
+        inc = _delay_incident(db, key="reg-email-timeout-retriable-001", shipment_id=shipment.id)
+        action = _add_action(db, inc, seq=1, atype=ActionType.email_customer)
+        db.commit()
+        db.refresh(inc)
+
+        execute_pending_actions(db, inc)
+        db.refresh(action)
+
+        assert action.status == ActionStatus.failed
+        assert action.retry_count == 1
+        assert (action.response_payload or {}).get("uncertain_outcome") is None
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 3. Approval Gate Scenarios (5 tests)
@@ -475,6 +565,7 @@ class TestIdempotency:
             "shift_date": "2026-03-22",
             "role": "Operator",
             "reason": "Sick leave",
+            "contractor_phone": "+15557654321",
             "severity": "medium",
             "source": "hr_webhook",
         }
@@ -575,6 +666,7 @@ class TestFullWorkflows:
                              "shift_date": "2026-03-22",
                              "role": "Welder",
                              "reason": "Injury",
+                             "contractor_phone": "+15557654321",
                              "severity": "high",
                              "source": "hr_webhook",
                          })

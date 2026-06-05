@@ -31,7 +31,12 @@ class SlackResult:
     error: str | None = None
 
 
-def send_message(channel: str | None, message: str) -> SlackResult:
+def send_message(
+    channel: str | None,
+    message: str,
+    *,
+    idempotency_key: str | None = None,
+) -> SlackResult:
     settings = get_settings()
     target = channel or settings.slack_default_channel
 
@@ -51,6 +56,8 @@ def send_message(channel: str | None, message: str) -> SlackResult:
             client.chat_postMessage, settings.timeout_slack_s, "slack",
             channel=target, text=message,
         )
+        if idempotency_key:
+            logger.info("Slack idempotency key: %s", idempotency_key)
         logger.info("Slack message sent to %s (ts=%s)", target, resp["ts"])
         cb.record_success()
         return SlackResult(ok=True, channel=target, ts=resp["ts"])

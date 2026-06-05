@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from uuid import uuid4
-
-from app.schemas import ActionResult, DelayWorkflowResponse
-from app.services.safety import check_human_approval_required
+from app.schemas import DelayWorkflowResponse
+from app.services.workflows.engine import DelayWorkflowRequest, get_workflow_engine
 
 
 def run_delay_workflow(
@@ -12,43 +10,13 @@ def run_delay_workflow(
     require_human_approval: bool,
     approved_by_human: bool,
 ) -> DelayWorkflowResponse:
-    workflow_id = str(uuid4())
-
-    actions: list[ActionResult] = [
-        ActionResult(
-            action="slack",
-            status="queued",
-            detail=f"Will notify ops channel about PO {event.po_number}.",
-        ),
-        ActionResult(
-            action="call_production",
-            status="queued",
-            detail=f"Will call supplier {event.supplier_name} for updated ETA.",
-        ),
-        ActionResult(
-            action="update_po",
-            status="queued",
-            detail=f"Will update PO {event.po_number} with ETA +{event.eta_days} days.",
-        ),
-    ]
-
-    decision = check_human_approval_required(
+    req = DelayWorkflowRequest(
+        po_number=event.po_number,
+        supplier_name=event.supplier_name,
+        eta_days=event.eta_days,
+        correlation_id=correlation_id,
         require_human_approval=require_human_approval,
-        is_customer_facing=True,
         approved_by_human=approved_by_human,
     )
-
-    email_status = "queued" if decision.allowed else "needs_approval"
-    actions.append(
-        ActionResult(
-            action="email_customer",
-            status=email_status,
-            detail=decision.reason,
-        )
-    )
-
-    return DelayWorkflowResponse(
-        workflow_id=workflow_id,
-        correlation_id=correlation_id,
-        actions=actions,
-    )
+    engine = get_workflow_engine()
+    return engine.run_shipment_delay(req)

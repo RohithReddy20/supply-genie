@@ -88,6 +88,7 @@ def absence_incident(db):
             "site_id": "SITE-TX-03",
             "shift_date": "2026-03-22",
             "role": "Forklift Operator",
+            "contractor_phone": "+15551230000",
             "reason": "Family emergency",
         },
     )

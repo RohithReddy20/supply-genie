@@ -120,6 +120,36 @@ class Settings:
     voice_graceful_close_timeout_s: float = _env_float(
         "VOICE_GRACEFUL_CLOSE_TIMEOUT_S", 15.0, min_value=5.0
     )
+    voice_session_heartbeat_s: float = _env_float(
+        "VOICE_SESSION_HEARTBEAT_S", 5.0, min_value=1.0
+    )
+    voice_state_checkpoint_interval_s: float = _env_float(
+        "VOICE_STATE_CHECKPOINT_INTERVAL_S", 5.0, min_value=1.0
+    )
+    voice_state_ttl_s: int = _env_int("VOICE_STATE_TTL_S", 3600, min_value=60)
+    voice_state_transcript_max_entries: int = _env_int(
+        "VOICE_STATE_TRANSCRIPT_MAX_ENTRIES", 200, min_value=20
+    )
+    voice_command_poll_interval_s: float = _env_float(
+        "VOICE_COMMAND_POLL_INTERVAL_S", 1.0, min_value=0.1
+    )
+    voice_command_queue_ttl_s: int = _env_int(
+        "VOICE_COMMAND_QUEUE_TTL_S", 1800, min_value=30
+    )
+    voice_owner_stale_after_s: float = _env_float(
+        "VOICE_OWNER_STALE_AFTER_S", 20.0, min_value=1.0
+    )
+    voice_state_redis_url: str = os.getenv("VOICE_STATE_REDIS_URL", "")
+    pod_id: str = os.getenv("POD_ID") or os.getenv("HOSTNAME", "local-dev")
+
+    # Action execution mode
+    action_execution_mode: str = os.getenv("ACTION_EXECUTION_MODE", "inline")
+    action_worker_poll_interval_s: float = _env_float(
+        "ACTION_WORKER_POLL_INTERVAL_S", 1.0, min_value=0.1
+    )
+
+    # Workflow engine mode
+    workflow_engine_mode: str = os.getenv("WORKFLOW_ENGINE_MODE", "queue")
 
 
 def get_settings() -> Settings:

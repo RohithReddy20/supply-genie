@@ -32,6 +32,8 @@ class AbsenceEventIn(BaseModel):
     shift_date: str = Field(min_length=10)
     role: str = Field(min_length=2)
     reason: str = Field(min_length=2)
+    contractor_id: UUID | None = None
+    contractor_phone: str | None = Field(default=None, min_length=5)
     severity: Severity = Severity.medium
     source: str = Field(default="hr_webhook", min_length=2)
 

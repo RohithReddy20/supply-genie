@@ -35,7 +35,13 @@ class CallResult:
     error: str | None = None
 
 
-def make_call(to: str, message: str, from_number: str | None = None) -> CallResult:
+def make_call(
+    to: str,
+    message: str,
+    from_number: str | None = None,
+    *,
+    idempotency_key: str | None = None,
+) -> CallResult:
     settings = get_settings()
 
     if settings.twilio_mock_mode:
@@ -62,6 +68,8 @@ def make_call(to: str, message: str, from_number: str | None = None) -> CallResu
             return client.calls.create(twiml=twiml, to=to, from_=from_num)
 
         call = with_timeout(_create_call, settings.timeout_twilio_s, "twilio")
+        if idempotency_key:
+            logger.info("Twilio idempotency key: %s", idempotency_key)
         logger.info("Twilio call initiated to %s (sid=%s, status=%s)", to, call.sid, call.status)
         cb.record_success()
         return CallResult(

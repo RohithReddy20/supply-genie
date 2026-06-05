@@ -41,10 +41,13 @@ async def readiness() -> dict[str, Any]:
 
     # Voice sessions
     try:
-        from app.services.voice_session import _active_sessions
+        from app.services.voice_pipeline import get_active_session_metadata
+
+        active_sessions = get_active_session_metadata()
     except ImportError:
-        _active_sessions = {}
-    checks["active_voice_sessions"] = len(_active_sessions)
+        active_sessions = []
+    checks["active_voice_sessions"] = len(active_sessions)
+    checks["stale_voice_sessions"] = sum(1 for session in active_sessions if session["stale"])
 
     all_ok = checks["database"] == "ok" and all(
         s == "closed" for s in cb_status.values()

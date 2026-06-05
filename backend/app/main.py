@@ -69,12 +69,18 @@ app.include_router(voice.router, prefix=settings.api_prefix)
 @app.on_event("startup")
 async def startup_event():
     logger.info("Starting %s (env=%s)", settings.app_name, settings.environment)
+    from app.services.action_dispatcher import start_action_worker
+
+    await start_action_worker()
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("Shutting down %s — draining active voice sessions", settings.app_name)
+    from app.services.action_dispatcher import stop_action_worker
     from app.services.voice_pipeline import get_active_sessions
+
+    await stop_action_worker()
     for sid, session in list(get_active_sessions().items()):
         if session._lifecycle:
             session._lifecycle.mark_closed()

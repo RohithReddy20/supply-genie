@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -17,6 +18,7 @@ from app.resilience import (
     get_fallback_message,
     with_timeout,
 )
+from app.services.connectors.email import send_email
 
 
 # ── Circuit Breaker Tests ────────────────────────────────────────────────
@@ -194,3 +196,81 @@ class TestFallbackMessages:
         msg = get_fallback_message("unknown_action")
         assert "unknown_action" in msg
         assert "failed" in msg
+
+
+class TestEmailConnectorIdempotency:
+    @patch("app.services.connectors.email.get_settings")
+    @patch("app.services.connectors.email.get_circuit_breaker")
+    @patch("app.services.connectors.email.with_timeout")
+    @patch("app.services.connectors.email.resend.Emails.send")
+    def test_passes_idempotency_key_to_resend(
+        self,
+        mock_send,
+        mock_with_timeout,
+        mock_get_cb,
+        mock_get_settings,
+    ):
+        mock_get_settings.return_value = SimpleNamespace(
+            resend_api_key="rk_test",
+            email_from="coord@example.com",
+            timeout_email_s=5.0,
+        )
+        cb = MagicMock()
+        cb.allow_request.return_value = True
+        mock_get_cb.return_value = cb
+        mock_send.return_value = {"id": "email_123"}
+
+        def _run(func, timeout_s, connector):
+            return func()
+
+        mock_with_timeout.side_effect = _run
+
+        result = send_email(
+            to="buyer@example.com",
+            subject="Test",
+            body="<p>hello</p>",
+            idempotency_key="action:abc",
+        )
+
+        assert result.ok is True
+        assert mock_send.call_count == 1
+        args = mock_send.call_args.args
+        assert len(args) == 2
+        assert args[1]["idempotency_key"] == "action:abc"
+
+    @patch("app.services.connectors.email.get_settings")
+    @patch("app.services.connectors.email.get_circuit_breaker")
+    @patch("app.services.connectors.email.with_timeout")
+    @patch("app.services.connectors.email.resend.Emails.send")
+    def test_omits_idempotency_key_when_not_provided(
+        self,
+        mock_send,
+        mock_with_timeout,
+        mock_get_cb,
+        mock_get_settings,
+    ):
+        mock_get_settings.return_value = SimpleNamespace(
+            resend_api_key="rk_test",
+            email_from="coord@example.com",
+            timeout_email_s=5.0,
+        )
+        cb = MagicMock()
+        cb.allow_request.return_value = True
+        mock_get_cb.return_value = cb
+        mock_send.return_value = {"id": "email_124"}
+
+        def _run(func, timeout_s, connector):
+            return func()
+
+        mock_with_timeout.side_effect = _run
+
+        result = send_email(
+            to="buyer@example.com",
+            subject="Test",
+            body="<p>hello</p>",
+        )
+
+        assert result.ok is True
+        assert mock_send.call_count == 1
+        args = mock_send.call_args.args
+        assert len(args) == 1

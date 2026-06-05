@@ -31,6 +31,8 @@ retry_exhaustion_counter: metrics.Counter | None = None
 circuit_breaker_trip_counter: metrics.Counter | None = None
 timeout_counter: metrics.Counter | None = None
 voice_drop_counter: metrics.Counter | None = None
+action_queue_event_counter: metrics.Counter | None = None
+voice_command_event_counter: metrics.Counter | None = None
 
 
 def configure_observability(service_name: str) -> None:
@@ -38,6 +40,7 @@ def configure_observability(service_name: str) -> None:
     global action_counter, action_duration, incident_counter
     global connector_latency, retry_exhaustion_counter, circuit_breaker_trip_counter
     global timeout_counter, voice_drop_counter
+    global action_queue_event_counter, voice_command_event_counter
 
     logging.basicConfig(
         level=logging.INFO,
@@ -95,6 +98,14 @@ def configure_observability(service_name: str) -> None:
     voice_drop_counter = _meter.create_counter(
         "voice.audio_drops",
         description="Number of audio frames dropped due to backpressure",
+    )
+    action_queue_event_counter = _meter.create_counter(
+        "action.queue.events",
+        description="Queue lifecycle events for action execution",
+    )
+    voice_command_event_counter = _meter.create_counter(
+        "voice.command.events",
+        description="Voice command routing and execution events",
     )
 
 
@@ -166,6 +177,16 @@ def record_timeout(connector: str) -> None:
 def record_voice_drops(direction: str, count: int) -> None:
     if voice_drop_counter:
         voice_drop_counter.add(count, {"direction": direction})
+
+
+def record_action_queue_event(event: str, mode: str) -> None:
+    if action_queue_event_counter:
+        action_queue_event_counter.add(1, {"event": event, "mode": mode})
+
+
+def record_voice_command_event(event: str, route: str) -> None:
+    if voice_command_event_counter:
+        voice_command_event_counter.add(1, {"event": event, "route": route})
 
 
 class CorrelationIdAdapter(logging.LoggerAdapter):

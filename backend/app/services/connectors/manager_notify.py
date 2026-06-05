@@ -23,6 +23,7 @@ def notify_site_manager(
     role: str,
     reason: str = "",
     channel: str | None = None,
+    idempotency_key: str | None = None,
 ) -> ManagerNotifyResult:
     """Send a formatted Slack notification to the site manager about a staffing
     gap that needs attention.
@@ -41,7 +42,11 @@ def notify_site_manager(
     )
 
     try:
-        result = slack_send(channel=channel, message=message)
+        result = slack_send(
+            channel=channel,
+            message=message,
+            idempotency_key=idempotency_key,
+        )
         logger.info(
             "Manager notification sent for site %s (ok=%s)", site_id, result.ok,
         )
